@@ -1,0 +1,51 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "mcp-codebase-index"
+version = "0.1.0"
+description = "Structural codebase indexer with MCP server for AI-assisted development"
+requires-python = ">=3.11"
+readme = "README.md"
+license = {file = "LICENSE"}
+authors = [
+    {name = "Michael Doyle"},
+]
+keywords = ["mcp", "codebase", "indexer", "code-navigation", "structural-analysis"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Libraries",
+]
+dependencies = []
+
+[project.optional-dependencies]
+mcp = ["mcp>=1.0"]
+dev = ["pytest>=8.0", "ruff>=0.5"]
+
+[project.scripts]
+mcp-codebase-index = "mcp_codebase_index.server:main_sync"
+
+[project.urls]
+Homepage = "https://github.com/MikeRecognex/mcp-codebase-index"
+Repository = "https://github.com/MikeRecognex/mcp-codebase-index"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/mcp_codebase_index"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+timeout = 30
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+
+[tool.mypy]
+python_version = "3.11"
+strict = true

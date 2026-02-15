@@ -1,0 +1,610 @@
+"""Structural query API for single-file and project-wide codebase navigation.
+
+Provides factory functions that create dictionaries of query functions
+bound to a StructuralMetadata (single file) or ProjectIndex (project-wide).
+All functions return plain dicts/strings for easy use in a REPL.
+"""
+
+from __future__ import annotations
+
+import fnmatch
+import re
+from collections import deque
+from typing import Callable
+
+from mcp_codebase_index.models import (
+    ClassInfo,
+    FunctionInfo,
+    ImportInfo,
+    ProjectIndex,
+    SectionInfo,
+    StructuralMetadata,
+)
+
+
+# ---------------------------------------------------------------------------
+# Single-file query functions
+# ---------------------------------------------------------------------------
+
+
+def create_file_query_functions(metadata: StructuralMetadata) -> dict[str, Callable]:
+    """Create query functions bound to a single file's structural metadata.
+
+    Returns a dict mapping function names to callables. Each function returns
+    plain dicts or strings suitable for printing in a REPL.
+    """
+
+    def get_structure_summary() -> str:
+        """Overview of the file: functions, classes, imports, line count."""
+        parts = [f"File: {metadata.source_name} ({metadata.total_lines} lines)"]
+
+        if metadata.imports:
+            modules = sorted({imp.module for imp in metadata.imports})
+            parts.append(f"Imports: {', '.join(modules)}")
+
+        if metadata.classes:
+            for cls in metadata.classes:
+                method_names = [m.name for m in cls.methods]
+                bases = f"({', '.join(cls.base_classes)})" if cls.base_classes else ""
+                parts.append(
+                    f"Class {cls.name}{bases} (lines {cls.line_range.start}-{cls.line_range.end}): "
+                    f"methods: {', '.join(method_names) if method_names else 'none'}"
+                )
+
+        top_level_funcs = [f for f in metadata.functions if not f.is_method]
+        if top_level_funcs:
+            for func in top_level_funcs:
+                parts.append(
+                    f"Function {func.name}({', '.join(func.parameters)}) "
+                    f"(lines {func.line_range.start}-{func.line_range.end})"
+                )
+
+        if metadata.sections:
+            for sec in metadata.sections:
+                indent = "  " * (sec.level - 1)
+                parts.append(
+                    f"{indent}Section: {sec.title} "
+                    f"(lines {sec.line_range.start}-{sec.line_range.end})"
+                )
+
+        return "\n".join(parts)
+
+    def get_lines(start: int, end: int) -> str:
+        """Get specific lines (1-indexed, inclusive)."""
+        if start < 1:
+            return "Error: start must be >= 1"
+        if end > metadata.total_lines:
+            end = metadata.total_lines
+        if start > end:
+            return f"Error: start ({start}) > end ({end})"
+        # lines are 0-indexed internally
+        return "\n".join(metadata.lines[start - 1 : end])
+
+    def get_line_count() -> int:
+        """Return the total number of lines."""
+        return metadata.total_lines
+
+    def get_functions() -> list[dict]:
+        """All functions with name, qualified_name, lines, params."""
+        return [
+            {
+                "name": f.name,
+                "qualified_name": f.qualified_name,
+                "lines": [f.line_range.start, f.line_range.end],
+                "params": f.parameters,
+                "is_method": f.is_method,
+                "parent_class": f.parent_class,
+            }
+            for f in metadata.functions
+        ]
+
+    def get_classes() -> list[dict]:
+        """All classes with name, lines, methods, bases."""
+        return [
+            {
+                "name": cls.name,
+                "lines": [cls.line_range.start, cls.line_range.end],
+                "methods": [m.name for m in cls.methods],
+                "bases": cls.base_classes,
+            }
+            for cls in metadata.classes
+        ]
+
+    def get_imports() -> list[dict]:
+        """All imports with module, names, line."""
+        return [
+            {
+                "module": imp.module,
+                "names": imp.names,
+                "line": imp.line_number,
+                "is_from_import": imp.is_from_import,
+            }
+            for imp in metadata.imports
+        ]
+
+    def get_function_source(name: str) -> str:
+        """Source of a function by name (searches top-level and methods)."""
+        for f in metadata.functions:
+            if f.name == name or f.qualified_name == name:
+                return "\n".join(
+                    metadata.lines[f.line_range.start - 1 : f.line_range.end]
+                )
+        return f"Error: function '{name}' not found"
+
+    def get_class_source(name: str) -> str:
+        """Source of a class by name."""
+        for cls in metadata.classes:
+            if cls.name == name:
+                return "\n".join(
+                    metadata.lines[cls.line_range.start - 1 : cls.line_range.end]
+                )
+        return f"Error: class '{name}' not found"
+
+    def get_sections() -> list[dict]:
+        """Sections for text files."""
+        return [
+            {
+                "title": sec.title,
+                "level": sec.level,
+                "lines": [sec.line_range.start, sec.line_range.end],
+            }
+            for sec in metadata.sections
+        ]
+
+    def get_section_content(title: str) -> str:
+        """Content of a section by title."""
+        for sec in metadata.sections:
+            if sec.title == title:
+                return "\n".join(
+                    metadata.lines[sec.line_range.start - 1 : sec.line_range.end]
+                )
+        return f"Error: section '{title}' not found"
+
+    def get_dependencies(name: str) -> list[str]:
+        """What this function/class references."""
+        deps = metadata.dependency_graph.get(name)
+        if deps is None:
+            return [f"Error: '{name}' not found in dependency graph"]
+        return list(deps)
+
+    def get_dependents(name: str) -> list[str]:
+        """What references this function/class."""
+        result = []
+        for source, targets in metadata.dependency_graph.items():
+            if name in targets:
+                result.append(source)
+        return result
+
+    def search_lines(pattern: str) -> list[dict]:
+        """Regex search, returns [{line_number, content}], max 100 results."""
+        try:
+            regex = re.compile(pattern)
+        except re.error as e:
+            return [{"error": f"Invalid regex: {e}"}]
+        results = []
+        for i, line in enumerate(metadata.lines):
+            if regex.search(line):
+                results.append({"line_number": i + 1, "content": line})
+                if len(results) >= 100:
+                    break
+        return results
+
+    return {
+        "get_structure_summary": get_structure_summary,
+        "get_lines": get_lines,
+        "get_line_count": get_line_count,
+        "get_functions": get_functions,
+        "get_classes": get_classes,
+        "get_imports": get_imports,
+        "get_function_source": get_function_source,
+        "get_class_source": get_class_source,
+        "get_sections": get_sections,
+        "get_section_content": get_section_content,
+        "get_dependencies": get_dependencies,
+        "get_dependents": get_dependents,
+        "search_lines": search_lines,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Project-wide query functions
+# ---------------------------------------------------------------------------
+
+
+def _resolve_file(index: ProjectIndex, file_path: str) -> StructuralMetadata | None:
+    """Resolve a file path to its StructuralMetadata, trying exact and relative matches."""
+    if file_path in index.files:
+        return index.files[file_path]
+    # Try matching against the end of stored paths
+    for stored_path, meta in index.files.items():
+        if stored_path.endswith(file_path) or file_path.endswith(stored_path):
+            return meta
+    return None
+
+
+def create_project_query_functions(index: ProjectIndex) -> dict[str, Callable]:
+    """Create query functions bound to a project-wide index.
+
+    Returns a dict mapping function names to callables. Each function returns
+    plain dicts or strings suitable for printing in a REPL.
+    """
+
+    def get_project_summary() -> str:
+        """High-level overview: file count, packages, top classes/functions."""
+        parts = [
+            f"Project: {index.root_path}",
+            f"Files: {index.total_files}, Lines: {index.total_lines}, "
+            f"Functions: {index.total_functions}, Classes: {index.total_classes}",
+        ]
+
+        # Identify packages (directories containing files)
+        packages = sorted({
+            "/".join(p.split("/")[:-1])
+            for p in index.files
+            if "/" in p
+        })
+        if packages:
+            parts.append(f"Packages: {', '.join(packages)}")
+
+        # Top classes
+        all_classes = []
+        for path, meta in index.files.items():
+            for cls in meta.classes:
+                all_classes.append(f"{cls.name} ({path})")
+        if all_classes:
+            parts.append(f"Classes: {', '.join(all_classes[:20])}")
+            if len(all_classes) > 20:
+                parts.append(f"  ... and {len(all_classes) - 20} more")
+
+        # Top functions (non-method)
+        all_funcs = []
+        for path, meta in index.files.items():
+            for func in meta.functions:
+                if not func.is_method:
+                    all_funcs.append(f"{func.name} ({path})")
+        if all_funcs:
+            parts.append(f"Functions: {', '.join(all_funcs[:20])}")
+            if len(all_funcs) > 20:
+                parts.append(f"  ... and {len(all_funcs) - 20} more")
+
+        return "\n".join(parts)
+
+    def list_files(pattern: str | None = None) -> list[str]:
+        """List indexed files, optional glob filter (using fnmatch)."""
+        paths = sorted(index.files.keys())
+        if pattern:
+            paths = [p for p in paths if fnmatch.fnmatch(p, pattern)]
+        return paths
+
+    def get_structure_summary(file_path: str | None = None) -> str:
+        """Per-file or project-level summary."""
+        if file_path is None:
+            return get_project_summary()
+        meta = _resolve_file(index, file_path)
+        if meta is None:
+            return f"Error: file '{file_path}' not found in index"
+        file_funcs = create_file_query_functions(meta)
+        return file_funcs["get_structure_summary"]()
+
+    def get_lines(file_path: str, start: int, end: int) -> str:
+        """Lines from a specific file."""
+        meta = _resolve_file(index, file_path)
+        if meta is None:
+            return f"Error: file '{file_path}' not found in index"
+        file_funcs = create_file_query_functions(meta)
+        return file_funcs["get_lines"](start, end)
+
+    def get_functions(file_path: str | None = None) -> list[dict]:
+        """Functions in a file, or all functions across the project."""
+        if file_path is not None:
+            meta = _resolve_file(index, file_path)
+            if meta is None:
+                return [{"error": f"file '{file_path}' not found in index"}]
+            file_funcs = create_file_query_functions(meta)
+            return file_funcs["get_functions"]()
+        # All functions across project
+        result = []
+        for path, meta in sorted(index.files.items()):
+            for f in meta.functions:
+                result.append({
+                    "name": f.name,
+                    "qualified_name": f.qualified_name,
+                    "lines": [f.line_range.start, f.line_range.end],
+                    "params": f.parameters,
+                    "is_method": f.is_method,
+                    "parent_class": f.parent_class,
+                    "file": path,
+                })
+        return result
+
+    def get_classes(file_path: str | None = None) -> list[dict]:
+        """Classes in a file or across the project."""
+        if file_path is not None:
+            meta = _resolve_file(index, file_path)
+            if meta is None:
+                return [{"error": f"file '{file_path}' not found in index"}]
+            file_funcs = create_file_query_functions(meta)
+            return file_funcs["get_classes"]()
+        result = []
+        for path, meta in sorted(index.files.items()):
+            for cls in meta.classes:
+                result.append({
+                    "name": cls.name,
+                    "lines": [cls.line_range.start, cls.line_range.end],
+                    "methods": [m.name for m in cls.methods],
+                    "bases": cls.base_classes,
+                    "file": path,
+                })
+        return result
+
+    def get_imports(file_path: str | None = None) -> list[dict]:
+        """Imports in a file or across the project."""
+        if file_path is not None:
+            meta = _resolve_file(index, file_path)
+            if meta is None:
+                return [{"error": f"file '{file_path}' not found in index"}]
+            file_funcs = create_file_query_functions(meta)
+            return file_funcs["get_imports"]()
+        result = []
+        for path, meta in sorted(index.files.items()):
+            for imp in meta.imports:
+                result.append({
+                    "module": imp.module,
+                    "names": imp.names,
+                    "line": imp.line_number,
+                    "is_from_import": imp.is_from_import,
+                    "file": path,
+                })
+        return result
+
+    def get_function_source(name: str, file_path: str | None = None) -> str:
+        """Source of a function, uses symbol_table to find file if not specified."""
+        if file_path is not None:
+            meta = _resolve_file(index, file_path)
+            if meta is None:
+                return f"Error: file '{file_path}' not found in index"
+            file_funcs = create_file_query_functions(meta)
+            return file_funcs["get_function_source"](name)
+        # Try symbol table
+        if name in index.symbol_table:
+            resolved_path = index.symbol_table[name]
+            meta = _resolve_file(index, resolved_path)
+            if meta is not None:
+                file_funcs = create_file_query_functions(meta)
+                result = file_funcs["get_function_source"](name)
+                if not result.startswith("Error:"):
+                    return result
+        # Search all files
+        for path, meta in sorted(index.files.items()):
+            for f in meta.functions:
+                if f.name == name or f.qualified_name == name:
+                    return "\n".join(
+                        meta.lines[f.line_range.start - 1 : f.line_range.end]
+                    )
+        return f"Error: function '{name}' not found in project"
+
+    def get_class_source(name: str, file_path: str | None = None) -> str:
+        """Source of a class, uses symbol_table to find file if not specified."""
+        if file_path is not None:
+            meta = _resolve_file(index, file_path)
+            if meta is None:
+                return f"Error: file '{file_path}' not found in index"
+            file_funcs = create_file_query_functions(meta)
+            return file_funcs["get_class_source"](name)
+        # Try symbol table
+        if name in index.symbol_table:
+            resolved_path = index.symbol_table[name]
+            meta = _resolve_file(index, resolved_path)
+            if meta is not None:
+                file_funcs = create_file_query_functions(meta)
+                result = file_funcs["get_class_source"](name)
+                if not result.startswith("Error:"):
+                    return result
+        # Search all files
+        for path, meta in sorted(index.files.items()):
+            for cls in meta.classes:
+                if cls.name == name:
+                    return "\n".join(
+                        meta.lines[cls.line_range.start - 1 : cls.line_range.end]
+                    )
+        return f"Error: class '{name}' not found in project"
+
+    def find_symbol(name: str) -> dict:
+        """Find where a symbol is defined: {file, line, type}."""
+        if name in index.symbol_table:
+            path = index.symbol_table[name]
+            meta = _resolve_file(index, path)
+            if meta is not None:
+                # Find the line number and type
+                for func in meta.functions:
+                    if func.name == name or func.qualified_name == name:
+                        return {
+                            "file": path,
+                            "line": func.line_range.start,
+                            "type": "method" if func.is_method else "function",
+                        }
+                for cls in meta.classes:
+                    if cls.name == name:
+                        return {
+                            "file": path,
+                            "line": cls.line_range.start,
+                            "type": "class",
+                        }
+        # Fallback: search all files
+        for path, meta in sorted(index.files.items()):
+            for func in meta.functions:
+                if func.name == name or func.qualified_name == name:
+                    return {
+                        "file": path,
+                        "line": func.line_range.start,
+                        "type": "method" if func.is_method else "function",
+                    }
+            for cls in meta.classes:
+                if cls.name == name:
+                    return {
+                        "file": path,
+                        "line": cls.line_range.start,
+                        "type": "class",
+                    }
+        return {"error": f"symbol '{name}' not found"}
+
+    def get_dependencies(name: str) -> list[str]:
+        """What this function/class references (from global_dependency_graph)."""
+        deps = index.global_dependency_graph.get(name)
+        if deps is None:
+            return [f"Error: '{name}' not found in dependency graph"]
+        return sorted(deps)
+
+    def get_dependents(name: str) -> list[str]:
+        """What references this function/class (from reverse_dependency_graph)."""
+        deps = index.reverse_dependency_graph.get(name)
+        if deps is None:
+            return [f"Error: '{name}' not found in reverse dependency graph"]
+        return sorted(deps)
+
+    def get_call_chain(from_name: str, to_name: str) -> list[str]:
+        """Shortest path in dependency graph (BFS)."""
+        if from_name not in index.global_dependency_graph:
+            return [f"Error: '{from_name}' not found in dependency graph"]
+        if from_name == to_name:
+            return [from_name]
+
+        # BFS
+        visited = {from_name}
+        queue: deque[list[str]] = deque([[from_name]])
+        while queue:
+            path = queue.popleft()
+            current = path[-1]
+            neighbors = index.global_dependency_graph.get(current, set())
+            for neighbor in sorted(neighbors):
+                if neighbor == to_name:
+                    return path + [neighbor]
+                if neighbor not in visited:
+                    visited.add(neighbor)
+                    queue.append(path + [neighbor])
+
+        return [f"Error: no path from '{from_name}' to '{to_name}'"]
+
+    def get_file_dependencies(file_path: str) -> list[str]:
+        """What files this file imports from (from import_graph)."""
+        deps = index.import_graph.get(file_path)
+        if deps is None:
+            return [f"Error: '{file_path}' not found in import graph"]
+        return sorted(deps)
+
+    def get_file_dependents(file_path: str) -> list[str]:
+        """What files import from this file (from reverse_import_graph)."""
+        deps = index.reverse_import_graph.get(file_path)
+        if deps is None:
+            return [f"Error: '{file_path}' not found in reverse import graph"]
+        return sorted(deps)
+
+    def search_codebase(pattern: str) -> list[dict]:
+        """Regex across all files, max 100 results, returns [{file, line_number, content}]."""
+        try:
+            regex = re.compile(pattern)
+        except re.error as e:
+            return [{"error": f"Invalid regex: {e}"}]
+        results = []
+        for path in sorted(index.files.keys()):
+            meta = index.files[path]
+            for i, line in enumerate(meta.lines):
+                if regex.search(line):
+                    results.append({
+                        "file": path,
+                        "line_number": i + 1,
+                        "content": line,
+                    })
+                    if len(results) >= 100:
+                        return results
+        return results
+
+    def get_change_impact(name: str) -> dict:
+        """Direct and transitive dependents of a symbol."""
+        direct = index.reverse_dependency_graph.get(name)
+        if direct is None:
+            return {"error": f"'{name}' not found in reverse dependency graph"}
+        direct_list = sorted(direct)
+
+        # BFS for transitive dependents
+        transitive = set()
+        queue = deque(list(direct))
+        visited = set(direct) | {name}
+        while queue:
+            current = queue.popleft()
+            transitive.add(current)
+            next_deps = index.reverse_dependency_graph.get(current, set())
+            for dep in next_deps:
+                if dep not in visited:
+                    visited.add(dep)
+                    queue.append(dep)
+
+        # Transitive = everything reachable beyond direct
+        transitive_only = sorted(transitive - set(direct_list))
+
+        return {
+            "direct": direct_list,
+            "transitive": transitive_only,
+        }
+
+    return {
+        "get_project_summary": get_project_summary,
+        "list_files": list_files,
+        "get_structure_summary": get_structure_summary,
+        "get_lines": get_lines,
+        "get_functions": get_functions,
+        "get_classes": get_classes,
+        "get_imports": get_imports,
+        "get_function_source": get_function_source,
+        "get_class_source": get_class_source,
+        "find_symbol": find_symbol,
+        "get_dependencies": get_dependencies,
+        "get_dependents": get_dependents,
+        "get_call_chain": get_call_chain,
+        "get_file_dependencies": get_file_dependencies,
+        "get_file_dependents": get_file_dependents,
+        "search_codebase": search_codebase,
+        "get_change_impact": get_change_impact,
+    }
+
+
+# ---------------------------------------------------------------------------
+# System prompt instructions
+# ---------------------------------------------------------------------------
+
+STRUCTURAL_QUERY_INSTRUCTIONS = """\
+Your REPL environment includes structural navigation functions for the codebase.
+These let you explore code structure without reading entire files into context.
+
+PROJECT OVERVIEW:
+  get_project_summary() -> str                  # File count, packages, entry points
+  list_files(pattern?) -> list[str]             # List files, optional glob (e.g. "*.py")
+
+FILE STRUCTURE:
+  get_structure_summary(file?) -> str           # Functions, classes, line counts for a file
+  get_lines(file, start, end) -> str            # Specific lines (1-indexed, inclusive)
+
+CODE NAVIGATION:
+  get_functions(file?) -> list[dict]            # All functions: name, lines, params
+  get_classes(file?) -> list[dict]              # All classes: name, lines, methods, bases
+  get_imports(file?) -> list[dict]              # All imports: module, names, line
+  get_function_source(name, file?) -> str       # Full source of a specific function
+  get_class_source(name, file?) -> str          # Full source of a specific class
+
+DEPENDENCY ANALYSIS:
+  find_symbol(name) -> dict                     # Where is this symbol defined?
+  get_dependencies(name) -> list[str]           # What does it call/use?
+  get_dependents(name) -> list[str]             # What calls/uses it?
+  get_call_chain(from, to) -> list              # Shortest dependency path
+  get_change_impact(name) -> dict               # Transitive impact of changing this symbol
+  get_file_dependencies(file) -> list[str]      # Files this file imports from
+  get_file_dependents(file) -> list[str]        # Files that import from this file
+
+SEARCH:
+  search_codebase(pattern) -> list[dict]        # Regex across all files (max 100 results)
+
+STRATEGY: Start with get_project_summary() to understand the repo layout. Use
+get_structure_summary(file) to understand a file before reading it. Use
+get_function_source(name) to read only what you need. Use dependency analysis
+to trace connections. This is dramatically cheaper than reading entire files.
+"""

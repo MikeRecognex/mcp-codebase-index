@@ -1,0 +1,389 @@
+"""Regex-based TypeScript annotator (v1, best-effort).
+
+This is NOT a full TypeScript parser. It handles common patterns for
+function declarations, class/interface/type declarations, and import
+statements using regular expressions and brace counting. Edge cases
+(e.g. functions inside template literals, deeply nested generics) may
+be missed, and that is acceptable for v1.
+"""
+
+import re
+from typing import Optional
+
+from mcp_codebase_index.models import (
+    ClassInfo,
+    FunctionInfo,
+    ImportInfo,
+    LineRange,
+    StructuralMetadata,
+)
+
+
+def _build_line_offsets(text: str, lines: list[str]) -> list[int]:
+    offsets: list[int] = []
+    pos = 0
+    for line in lines:
+        offsets.append(pos)
+        pos += len(line) + 1
+    return offsets
+
+
+def _find_brace_end(lines: list[str], start_line_0: int) -> int:
+    """Starting from *start_line_0*, find the 0-based line index where
+    the outermost opening brace is closed.  Returns *start_line_0* if
+    no brace is found on that line (one-liner without braces)."""
+    depth = 0
+    found_open = False
+    for idx in range(start_line_0, len(lines)):
+        for ch in lines[idx]:
+            if ch == "{":
+                depth += 1
+                found_open = True
+            elif ch == "}":
+                depth -= 1
+                if found_open and depth == 0:
+                    return idx
+    # If we never found a closing brace, return last line
+    return len(lines) - 1
+
+
+# ---------------------------------------------------------------------------
+# Import detection
+# ---------------------------------------------------------------------------
+
+_IMPORT_RE = re.compile(
+    r"""^import\s+"""
+    r"""(?:"""
+    r"""(?:type\s+)?"""           # optional 'type' keyword
+    r"""\{([^}]*)\}\s+from\s+"""  # named imports  { A, B }
+    r"""|"""
+    r"""(\*\s+as\s+\w+)\s+from\s+"""  # namespace import  * as X
+    r"""|"""
+    r"""(\w+)\s+from\s+"""        # default import   Foo
+    r"""|"""
+    r"""(\w+)\s*,\s*\{([^}]*)\}\s+from\s+"""  # default + named
+    r""")"""
+    r"""['"]([^'"]+)['"]""",      # module path
+    re.MULTILINE,
+)
+
+# Simpler fallback: import '...' (side-effect import)
+_SIDE_EFFECT_IMPORT_RE = re.compile(
+    r"""^import\s+['"]([^'"]+)['"]""",
+    re.MULTILINE,
+)
+
+
+def _parse_imports(lines: list[str]) -> list[ImportInfo]:
+    imports: list[ImportInfo] = []
+    for line_0, line in enumerate(lines):
+        stripped = line.strip()
+        if not stripped.startswith("import"):
+            continue
+
+        m = _IMPORT_RE.match(stripped)
+        if m:
+            named_group = m.group(1)
+            namespace_group = m.group(2)
+            default_group = m.group(3)
+            default_plus_named_default = m.group(4)
+            default_plus_named_names = m.group(5)
+            module = m.group(6)
+
+            names: list[str] = []
+            alias: Optional[str] = None
+
+            if named_group is not None:
+                names = [n.strip().split(" as ")[0].strip() for n in named_group.split(",") if n.strip()]
+            elif namespace_group is not None:
+                # * as X
+                alias = namespace_group.split("as")[-1].strip()
+            elif default_group is not None:
+                alias = default_group
+            elif default_plus_named_default is not None:
+                alias = default_plus_named_default
+                if default_plus_named_names is not None:
+                    names = [n.strip().split(" as ")[0].strip() for n in default_plus_named_names.split(",") if n.strip()]
+
+            imports.append(ImportInfo(
+                module=module,
+                names=names,
+                alias=alias,
+                line_number=line_0 + 1,
+                is_from_import=True,
+            ))
+            continue
+
+        m2 = _SIDE_EFFECT_IMPORT_RE.match(stripped)
+        if m2:
+            imports.append(ImportInfo(
+                module=m2.group(1),
+                names=[],
+                alias=None,
+                line_number=line_0 + 1,
+                is_from_import=False,
+            ))
+
+    return imports
+
+
+# ---------------------------------------------------------------------------
+# Function detection
+# ---------------------------------------------------------------------------
+
+# Patterns for standalone / exported functions
+_FUNC_DECL_RE = re.compile(
+    r"^(?:export\s+)?(?:async\s+)?function\s+(\w+)\s*\(([^)]*)\)"
+)
+# Arrow function assigned to const/let/var
+_ARROW_FUNC_RE = re.compile(
+    r"^(?:export\s+)?(?:const|let|var)\s+(\w+)\s*=\s*(?:async\s+)?\(([^)]*)\)\s*(?::\s*[^=]+?)?\s*=>"
+)
+
+# Method inside a class body (indented)
+_METHOD_RE = re.compile(
+    r"^\s+(?:(?:public|private|protected|static|async|readonly|abstract|override|get|set)\s+)*(\w+)\s*\(([^)]*)\)"
+)
+
+
+def _extract_params(raw: str) -> list[str]:
+    """Extract parameter names from a raw parameter string."""
+    params: list[str] = []
+    for p in raw.split(","):
+        p = p.strip()
+        if not p:
+            continue
+        # Remove type annotations, defaults, optional markers
+        name = re.split(r"[:\s=?]", p)[0].strip()
+        if name and name != "...":
+            # Handle destructuring – skip for now
+            if name.startswith("{") or name.startswith("["):
+                continue
+            params.append(name)
+    return params
+
+
+# ---------------------------------------------------------------------------
+# Class / interface / type detection
+# ---------------------------------------------------------------------------
+
+_CLASS_RE = re.compile(
+    r"^(?:export\s+)?(?:abstract\s+)?class\s+(\w+)(?:\s+extends\s+([\w.]+))?(?:\s+implements\s+([\w.,\s]+))?"
+)
+
+_INTERFACE_RE = re.compile(
+    r"^(?:export\s+)?interface\s+(\w+)(?:\s+extends\s+([\w.,\s]+))?"
+)
+
+_TYPE_ALIAS_RE = re.compile(
+    r"^(?:export\s+)?type\s+(\w+)\s*(?:<[^>]*>)?\s*="
+)
+
+
+# ---------------------------------------------------------------------------
+# Main annotator
+# ---------------------------------------------------------------------------
+
+def annotate_typescript(source: str, source_name: str = "<source>") -> StructuralMetadata:
+    """Parse TypeScript source and extract structural metadata using regex.
+
+    Detects:
+      - function declarations (function foo, const foo = () =>)
+      - class declarations (class Foo, export class Foo extends Bar)
+      - interface declarations (treated as ClassInfo with no methods by default)
+      - type alias declarations (treated as ClassInfo with empty body)
+      - import statements
+      - Methods inside classes (is_method=True, parent_class set)
+
+    Uses brace counting to determine line ranges of functions and classes.
+    """
+    lines = source.split("\n")
+    total_lines = len(lines)
+    total_chars = len(source)
+    line_offsets = _build_line_offsets(source, lines)
+
+    imports = _parse_imports(lines)
+
+    functions: list[FunctionInfo] = []
+    classes: list[ClassInfo] = []
+
+    # Track which lines are consumed by class bodies so we can tag methods.
+    # We'll do two passes:
+    #   1. Detect top-level classes/interfaces/types
+    #   2. Detect top-level functions (not inside a class)
+    #   3. Detect methods inside class bodies
+
+    # Pass 1: classes, interfaces, type aliases
+    class_ranges: list[tuple[str, int, int, list[str]]] = []  # (name, start_0, end_0, bases)
+
+    i = 0
+    while i < total_lines:
+        stripped = lines[i].strip()
+
+        # Class
+        cm = _CLASS_RE.match(stripped)
+        if cm:
+            name = cm.group(1)
+            bases: list[str] = []
+            if cm.group(2):
+                bases.append(cm.group(2).strip())
+            if cm.group(3):
+                bases.extend(b.strip() for b in cm.group(3).split(",") if b.strip())
+            end_0 = _find_brace_end(lines, i)
+            class_ranges.append((name, i, end_0, bases))
+            i = end_0 + 1
+            continue
+
+        # Interface
+        im = _INTERFACE_RE.match(stripped)
+        if im:
+            name = im.group(1)
+            bases = []
+            if im.group(2):
+                bases = [b.strip() for b in im.group(2).split(",") if b.strip()]
+            end_0 = _find_brace_end(lines, i)
+            class_ranges.append((name, i, end_0, bases))
+            i = end_0 + 1
+            continue
+
+        # Type alias (single line or multi-line)
+        tm = _TYPE_ALIAS_RE.match(stripped)
+        if tm:
+            name = tm.group(1)
+            # Type aliases may span multiple lines if they use unions etc.
+            # Simple heuristic: if the line has a '{', find the brace end
+            if "{" in stripped:
+                end_0 = _find_brace_end(lines, i)
+            else:
+                # Scan until we find a line ending with ';' or a non-continuation
+                end_0 = i
+                for j in range(i, total_lines):
+                    if ";" in lines[j] or (j > i and not lines[j].strip().startswith("|") and not lines[j].strip().startswith("&")):
+                        end_0 = j
+                        break
+                else:
+                    end_0 = total_lines - 1
+            class_ranges.append((name, i, end_0, []))
+            i = end_0 + 1
+            continue
+
+        i += 1
+
+    # Pass 2: detect methods inside each class body
+    class_methods: dict[str, list[FunctionInfo]] = {name: [] for name, *_ in class_ranges}
+
+    for class_name, cls_start_0, cls_end_0, _ in class_ranges:
+        for j in range(cls_start_0 + 1, cls_end_0 + 1):
+            line = lines[j]
+            mm = _METHOD_RE.match(line)
+            if mm:
+                method_name = mm.group(1)
+                # Skip things that look like keywords used as property names
+                if method_name in ("if", "else", "for", "while", "switch", "return", "new", "throw", "import", "export", "const", "let", "var"):
+                    continue
+                params = _extract_params(mm.group(2))
+                # Find end of method via brace counting
+                if "{" in line:
+                    mend_0 = _find_brace_end(lines, j)
+                else:
+                    mend_0 = j  # abstract method or interface member, single line
+
+                func_info = FunctionInfo(
+                    name=method_name,
+                    qualified_name=f"{class_name}.{method_name}",
+                    line_range=LineRange(start=j + 1, end=mend_0 + 1),
+                    parameters=params,
+                    decorators=[],
+                    docstring=None,
+                    is_method=True,
+                    parent_class=class_name,
+                )
+                class_methods[class_name].append(func_info)
+                functions.append(func_info)
+
+    # Build ClassInfo objects
+    for class_name, cls_start_0, cls_end_0, bases in class_ranges:
+        classes.append(ClassInfo(
+            name=class_name,
+            line_range=LineRange(start=cls_start_0 + 1, end=cls_end_0 + 1),
+            base_classes=bases,
+            methods=class_methods[class_name],
+            decorators=[],
+            docstring=None,
+        ))
+
+    # Build a set of line ranges consumed by classes for excluding top-level functions
+    class_line_set: set[int] = set()
+    for _, cs0, ce0, _ in class_ranges:
+        class_line_set.update(range(cs0, ce0 + 1))
+
+    # Pass 3: top-level functions (not inside a class)
+    i = 0
+    while i < total_lines:
+        if i in class_line_set:
+            i += 1
+            continue
+
+        stripped = lines[i].strip()
+
+        # function declarations
+        fm = _FUNC_DECL_RE.match(stripped)
+        if fm:
+            name = fm.group(1)
+            params = _extract_params(fm.group(2))
+            if "{" in stripped or (i + 1 < total_lines and "{" in lines[i + 1].strip()):
+                end_0 = _find_brace_end(lines, i)
+            else:
+                end_0 = i
+            functions.append(FunctionInfo(
+                name=name,
+                qualified_name=name,
+                line_range=LineRange(start=i + 1, end=end_0 + 1),
+                parameters=params,
+                decorators=[],
+                docstring=None,
+                is_method=False,
+                parent_class=None,
+            ))
+            i = end_0 + 1
+            continue
+
+        # Arrow functions
+        am = _ARROW_FUNC_RE.match(stripped)
+        if am:
+            name = am.group(1)
+            params = _extract_params(am.group(2))
+            if "{" in stripped:
+                end_0 = _find_brace_end(lines, i)
+            else:
+                # Single-expression arrow: find the end via semicolon or next non-continuation
+                end_0 = i
+                for j in range(i, total_lines):
+                    if ";" in lines[j] or (j > i and lines[j].strip() and not lines[j].strip().endswith(",")):
+                        end_0 = j
+                        break
+            functions.append(FunctionInfo(
+                name=name,
+                qualified_name=name,
+                line_range=LineRange(start=i + 1, end=end_0 + 1),
+                parameters=params,
+                decorators=[],
+                docstring=None,
+                is_method=False,
+                parent_class=None,
+            ))
+            i = end_0 + 1
+            continue
+
+        i += 1
+
+    return StructuralMetadata(
+        source_name=source_name,
+        total_lines=total_lines,
+        total_chars=total_chars,
+        lines=lines,
+        line_char_offsets=line_offsets,
+        functions=functions,
+        classes=classes,
+        imports=imports,
+    )
