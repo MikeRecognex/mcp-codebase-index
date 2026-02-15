@@ -1,6 +1,6 @@
 # mcp-codebase-index
 
-A structural codebase indexer with an [MCP](https://modelcontextprotocol.io) server for AI-assisted development. Zero dependencies for the indexer itself.
+A structural codebase indexer with an [MCP](https://modelcontextprotocol.io) server for AI-assisted development. Zero runtime dependencies — uses Python's `ast` module for Python analysis and regex for TypeScript/JS. Requires Python 3.11+.
 
 ## What It Does
 
@@ -17,10 +17,10 @@ Indexes codebases by parsing source files into structural metadata -- functions,
 
 ## Installation
 
-Install from a [GitHub release](https://github.com/MikeRecognex/mcp-codebase-index/releases):
+Install from a [GitHub release](https://github.com/MikeRecognex/mcp-codebase-index/releases) (replace `VERSION` with the latest, e.g. `0.1.0`):
 
 ```bash
-pip install "mcp-codebase-index[mcp] @ https://github.com/MikeRecognex/mcp-codebase-index/releases/download/v0.1.0/mcp_codebase_index-0.1.0-py3-none-any.whl"
+pip install "mcp-codebase-index[mcp] @ https://github.com/MikeRecognex/mcp-codebase-index/releases/download/vVERSION/mcp_codebase_index-VERSION-py3-none-any.whl"
 ```
 
 For development (from a local clone):
@@ -96,7 +96,7 @@ Or using the Python module directly (useful if installed in a virtualenv):
 | `get_file_dependencies` | Files imported by a given file |
 | `get_file_dependents` | Files that import from a given file |
 | `search_codebase` | Regex search across all files (max 100 results) |
-| `reindex` | Re-index the project after file changes |
+| `reindex` | Re-index the project after file changes (MCP server only) |
 
 ## Programmatic Usage
 
