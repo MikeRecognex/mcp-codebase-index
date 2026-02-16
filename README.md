@@ -17,11 +17,11 @@ Indexes codebases by parsing source files into structural metadata -- functions,
 
 ## Installation
 
-Install from a [GitHub release](https://github.com/MikeRecognex/mcp-codebase-index/releases) (replace `VERSION` with the latest, e.g. `0.1.0`):
-
 ```bash
-pip install "mcp-codebase-index[mcp] @ https://github.com/MikeRecognex/mcp-codebase-index/releases/download/vVERSION/mcp_codebase_index-VERSION-py3-none-any.whl"
+pip install "mcp-codebase-index[mcp]"
 ```
+
+The `[mcp]` extra includes the MCP server dependency. Omit it if you only need the programmatic API.
 
 For development (from a local clone):
 
