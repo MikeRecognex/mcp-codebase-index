@@ -45,6 +45,17 @@ PROJECT_ROOT=/path/to/project python -m mcp_codebase_index.server
 
 ### Configuring with OpenClaw
 
+Install the package on the machine where OpenClaw is running:
+
+```bash
+# Local install
+pip install "mcp-codebase-index[mcp]"
+
+# Or inside a Docker container / remote VPS
+docker exec -it openclaw bash
+pip install "mcp-codebase-index[mcp]"
+```
+
 Add the MCP server to your OpenClaw agent config (`openclaw.json`):
 
 ```json
@@ -68,7 +79,19 @@ Add the MCP server to your OpenClaw agent config (`openclaw.json`):
 }
 ```
 
-Verify the connection with `openclaw mcp list`. All 17 tools will be available to your agent.
+Restart OpenClaw and verify the connection:
+
+```bash
+openclaw mcp list
+```
+
+All 17 tools will be available to your agent.
+
+**Performance note:** OpenClaw's default MCP integration via mcporter spawns a fresh server process per tool call, which means the index is rebuilt each time (~1-2s for small projects, longer for large ones). For persistent connections, use the [openclaw-mcp-adapter](https://github.com/androidStern-personal/openclaw-mcp-adapter) plugin, which connects once at startup and keeps the server running:
+
+```bash
+pip install openclaw-mcp-adapter
+```
 
 ### Configuring with Claude Code
 
