@@ -43,6 +43,33 @@ PROJECT_ROOT=/path/to/project python -m mcp_codebase_index.server
 
 `PROJECT_ROOT` specifies which directory to index. Defaults to the current working directory.
 
+### Configuring with OpenClaw
+
+Add the MCP server to your OpenClaw agent config (`openclaw.json`):
+
+```json
+{
+  "agents": {
+    "list": [{
+      "id": "main",
+      "mcp": {
+        "servers": [
+          {
+            "name": "codebase-index",
+            "command": "mcp-codebase-index",
+            "env": {
+              "PROJECT_ROOT": "/path/to/project"
+            }
+          }
+        ]
+      }
+    }]
+  }
+}
+```
+
+Verify the connection with `openclaw mcp list`. All 17 tools will be available to your agent.
+
 ### Configuring with Claude Code
 
 Add to your project's `.mcp.json`:

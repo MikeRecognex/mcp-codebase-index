@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "mcp-codebase-index"
-version = "0.1.1"
+version = "0.1.2"
 description = "Structural codebase indexer with MCP server for AI-assisted development"
 requires-python = ">=3.11"
 readme = "README.md"
