@@ -134,6 +134,18 @@ Or using the Python module directly (useful if installed in a virtualenv):
 }
 ```
 
+### Tip: Encourage the AI to Use Indexed Tools
+
+By default, AI assistants may still read entire files instead of using the indexed tools. Add this to your project's `CLAUDE.md` (or equivalent instructions file) to nudge it:
+
+```
+Prefer using codebase-index MCP tools (get_project_summary, find_symbol, get_function_source,
+get_class_source, get_dependencies, get_dependents, get_change_impact, get_call_chain, etc.)
+over reading entire files when navigating the codebase.
+```
+
+This ensures the AI reaches for surgical indexed queries first, which saves tokens and context window.
+
 ### Available Tools (17)
 
 | Tool | Description |
