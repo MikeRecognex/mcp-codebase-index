@@ -168,6 +168,12 @@ This ensures the AI reaches for surgical indexed queries first, which saves toke
 | `search_codebase` | Regex search across all files (max 100 results) |
 | `reindex` | Re-index the project after file changes (MCP server only) |
 
+## How Is This Different from LSP?
+
+LSP answers "where is this function?" — mcp-codebase-index answers "what happens if I change it?" LSP is point queries: one symbol, one file, one position. It can tell you where `LLMClient` is defined and who references it. But ask "what breaks transitively if I refactor `LLMClient`?" and LSP has nothing. This tool returns 11 direct dependents and 31 transitive impacts in a single call — 204 characters. To get the same answer from LSP, the AI would need to chain dozens of find-reference calls recursively, reading files at every step, burning thousands of tokens to reconstruct what the dependency graph already knows.
+
+LSP also requires you to install a separate language server for every language in your project — pyright for Python, vtsls for TypeScript, gopls for Go. Each one is a heavyweight binary with its own dependencies and configuration. mcp-codebase-index is zero dependencies, handles Python + TypeScript/JS + Markdown out of the box, and every response has built-in token budget controls (`max_results`, `max_lines`). LSP was built for IDEs. This was built for AI.
+
 ## Programmatic Usage
 
 ```python
