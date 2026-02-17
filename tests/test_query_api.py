@@ -1,6 +1,5 @@
 """Tests for the structural query API (single-file and project-wide)."""
 
-import pytest
 
 from mcp_codebase_index.models import (
     ClassInfo,

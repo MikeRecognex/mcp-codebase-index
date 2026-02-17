@@ -1,13 +1,8 @@
 """Tests for the Python file annotator."""
 
-import pytest
 
 from mcp_codebase_index.python_annotator import annotate_python
 from mcp_codebase_index.models import (
-    ClassInfo,
-    FunctionInfo,
-    ImportInfo,
-    LineRange,
     StructuralMetadata,
 )
 

@@ -16,7 +16,6 @@ import textwrap
 
 import pytest
 
-from mcp_codebase_index.models import ProjectIndex
 from mcp_codebase_index.project_indexer import ProjectIndexer
 
 

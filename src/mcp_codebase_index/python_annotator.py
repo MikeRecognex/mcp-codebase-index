@@ -24,8 +24,6 @@ functions, classes, imports, and a best-effort dependency graph.
 
 import ast
 import logging
-import warnings
-from typing import Any
 
 from mcp_codebase_index.models import (
     ClassInfo,

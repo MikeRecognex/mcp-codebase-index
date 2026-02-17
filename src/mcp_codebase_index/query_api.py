@@ -31,11 +31,7 @@ from collections import deque
 from typing import Callable
 
 from mcp_codebase_index.models import (
-    ClassInfo,
-    FunctionInfo,
-    ImportInfo,
     ProjectIndex,
-    SectionInfo,
     StructuralMetadata,
 )
 

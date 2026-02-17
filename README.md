@@ -1,3 +1,4 @@
+<!-- mcp-name: io.github.MikeRecognex/mcp-codebase-index -->
 # mcp-codebase-index
 
 [![PyPI version](https://img.shields.io/pypi/v/mcp-codebase-index)](https://pypi.org/project/mcp-codebase-index/)
