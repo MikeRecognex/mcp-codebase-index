@@ -178,4 +178,9 @@ The structural indexer was originally developed as part of the [RMLPlus](https:/
 
 ## License
 
-MIT
+This project is dual-licensed:
+
+- **AGPL-3.0** for open-source use — see [LICENSE](LICENSE)
+- **Commercial License** for proprietary use — see [COMMERCIAL-LICENSE.md](COMMERCIAL-LICENSE.md)
+
+If you're using mcp-codebase-index as a standalone MCP server for development, the AGPL-3.0 license applies at no cost. If you're embedding it in a proprietary product or offering it as part of a hosted service, you'll need a commercial license. See [COMMERCIAL-LICENSE.md](COMMERCIAL-LICENSE.md) for details.

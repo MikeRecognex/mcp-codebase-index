@@ -17,6 +17,7 @@ The core idea: AI coding assistants waste enormous amounts of context window rea
 - **In-process indexing.** The entire index lives in memory as Python dataclasses. No database, no filesystem cache. Rebuilds in ~1-2 seconds for typical projects.
 - **MCP-native.** Designed from the ground up as an MCP server, not a CLI tool with MCP bolted on. Every query function maps 1:1 to an MCP tool.
 - **Backward-compatible output controls.** As of v0.2.0, every tool that can produce large output accepts optional size-limiting parameters. All defaults preserve the original behavior.
+- **Dual licensed.** AGPL-3.0 for open-source use, commercial license available for proprietary embedding.
 
 ---
 
@@ -31,10 +32,10 @@ The core idea: AI coding assistants waste enormous amounts of context window rea
                                ▼
 ┌─────────────────────────────────────────────────────────────────┐
 │                         server.py                               │
-│  ┌──────────────┐  ┌──────────────┐  ┌───────────────────────┐ │
-│  │ Tool schemas  │  │  call_tool   │  │   _format_result      │ │
-│  │ (17 tools)    │  │  dispatch    │  │   (JSON serializer)   │ │
-│  └──────────────┘  └──────┬───────┘  └───────────────────────┘ │
+│  ┌──────────────┐  ┌──────────────┐  ┌───────────────────────┐  │
+│  │ Tool schemas │  │  call_tool   │  │   _format_result      │  │
+│  │ (17 tools)   │  │  dispatch    │  │   (JSON serializer)   │  │
+│  └──────────────┘  └──────┬───────┘  └───────────────────────┘  │
 └───────────────────────────┼─────────────────────────────────────┘
                             │ function calls
                             ▼
@@ -45,7 +46,7 @@ The core idea: AI coding assistants waste enormous amounts of context window rea
 │                                                                 │
 │  17 closures bound to a ProjectIndex:                           │
 │    get_project_summary, list_files, get_functions,              │
-│    get_classes, get_imports, get_function_source,                │
+│    get_classes, get_imports, get_function_source,               │
 │    get_class_source, find_symbol, get_dependencies,             │
 │    get_dependents, get_change_impact, get_call_chain,           │
 │    get_file_dependencies, get_file_dependents,                  │
@@ -65,16 +66,16 @@ The core idea: AI coding assistants waste enormous amounts of context window rea
 │                                                                 │
 │  StructuralMetadata    (one per file)                           │
 │    ├── lines, total_lines, total_chars                          │
-│    ├── functions: list[FunctionInfo]                             │
-│    ├── classes: list[ClassInfo]                                  │
-│    ├── imports: list[ImportInfo]                                 │
-│    ├── sections: list[SectionInfo]                               │
-│    └── dependency_graph (intra-file)                             │
+│    ├── functions: list[FunctionInfo]                            │
+│    ├── classes: list[ClassInfo]                                 │
+│    ├── imports: list[ImportInfo]                                │
+│    ├── sections: list[SectionInfo]                              │
+│    └── dependency_graph (intra-file)                            │
 └───────────────────────────┬─────────────────────────────────────┘
                             │ built by
                             ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│                    project_indexer.py                            │
+│                    project_indexer.py                           │
 │                                                                 │
 │  ProjectIndexer                                                 │
 │    1. Discover files (glob + exclude patterns)                  │
@@ -89,7 +90,7 @@ The core idea: AI coding assistants waste enormous amounts of context window rea
                             ▼
 ┌─────────────────────────────────────────────────────────────────┐
 │                       annotator.py                              │
-│                     (dispatch layer)                             │
+│                     (dispatch layer)                            │
 │                                                                 │
 │  .py  ──► python_annotator.py    (ast.parse)                    │
 │  .ts/.tsx/.js/.jsx ──► typescript_annotator.py  (regex)         │
