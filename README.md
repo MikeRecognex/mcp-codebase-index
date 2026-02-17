@@ -1,5 +1,12 @@
 # mcp-codebase-index
 
+[![PyPI version](https://img.shields.io/pypi/v/mcp-codebase-index)](https://pypi.org/project/mcp-codebase-index/)
+[![CI](https://github.com/MikeRecognex/mcp-codebase-index/actions/workflows/ci.yml/badge.svg)](https://github.com/MikeRecognex/mcp-codebase-index/actions/workflows/ci.yml)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
+[![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
+[![MCP](https://img.shields.io/badge/MCP-compatible-purple.svg)](https://modelcontextprotocol.io)
+[![Zero Dependencies](https://img.shields.io/badge/dependencies-zero-brightgreen.svg)]()
+
 A structural codebase indexer with an [MCP](https://modelcontextprotocol.io) server for AI-assisted development. Zero runtime dependencies — uses Python's `ast` module for Python analysis and regex for TypeScript/JS. Requires Python 3.11+.
 
 ## What It Does
