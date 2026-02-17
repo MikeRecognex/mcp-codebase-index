@@ -87,6 +87,10 @@ TOOLS = [
                     "type": "string",
                     "description": "Glob pattern to filter files (uses fnmatch).",
                 },
+                "max_results": {
+                    "type": "integer",
+                    "description": "Maximum number of results to return (0 = unlimited, default 0).",
+                },
             },
         },
     ),
@@ -117,6 +121,10 @@ TOOLS = [
                     "type": "string",
                     "description": "Optional file path to narrow the search.",
                 },
+                "max_lines": {
+                    "type": "integer",
+                    "description": "Maximum number of source lines to return (0 = unlimited, default 0).",
+                },
             },
             "required": ["name"],
         },
@@ -135,6 +143,10 @@ TOOLS = [
                     "type": "string",
                     "description": "Optional file path to narrow the search.",
                 },
+                "max_lines": {
+                    "type": "integer",
+                    "description": "Maximum number of source lines to return (0 = unlimited, default 0).",
+                },
             },
             "required": ["name"],
         },
@@ -149,6 +161,10 @@ TOOLS = [
                     "type": "string",
                     "description": "Relative path to filter to a single file. Omit for all project functions.",
                 },
+                "max_results": {
+                    "type": "integer",
+                    "description": "Maximum number of results to return (0 = unlimited, default 0).",
+                },
             },
         },
     ),
@@ -162,6 +178,10 @@ TOOLS = [
                     "type": "string",
                     "description": "Relative path to filter to a single file. Omit for all project classes.",
                 },
+                "max_results": {
+                    "type": "integer",
+                    "description": "Maximum number of results to return (0 = unlimited, default 0).",
+                },
             },
         },
     ),
@@ -174,6 +194,10 @@ TOOLS = [
                 "file_path": {
                     "type": "string",
                     "description": "Relative path to filter to a single file. Omit for all project imports.",
+                },
+                "max_results": {
+                    "type": "integer",
+                    "description": "Maximum number of results to return (0 = unlimited, default 0).",
                 },
             },
         },
@@ -202,6 +226,10 @@ TOOLS = [
                     "type": "string",
                     "description": "Symbol name to query.",
                 },
+                "max_results": {
+                    "type": "integer",
+                    "description": "Maximum number of results to return (0 = unlimited, default 0).",
+                },
             },
             "required": ["name"],
         },
@@ -216,6 +244,10 @@ TOOLS = [
                     "type": "string",
                     "description": "Symbol name to query.",
                 },
+                "max_results": {
+                    "type": "integer",
+                    "description": "Maximum number of results to return (0 = unlimited, default 0).",
+                },
             },
             "required": ["name"],
         },
@@ -229,6 +261,14 @@ TOOLS = [
                 "name": {
                     "type": "string",
                     "description": "Symbol name to analyze.",
+                },
+                "max_direct": {
+                    "type": "integer",
+                    "description": "Maximum number of direct dependents to return (0 = unlimited, default 0).",
+                },
+                "max_transitive": {
+                    "type": "integer",
+                    "description": "Maximum number of transitive dependents to return (0 = unlimited, default 0).",
                 },
             },
             "required": ["name"],
@@ -262,6 +302,10 @@ TOOLS = [
                     "type": "string",
                     "description": "Relative path to the file.",
                 },
+                "max_results": {
+                    "type": "integer",
+                    "description": "Maximum number of results to return (0 = unlimited, default 0).",
+                },
             },
             "required": ["file_path"],
         },
@@ -276,6 +320,10 @@ TOOLS = [
                     "type": "string",
                     "description": "Relative path to the file.",
                 },
+                "max_results": {
+                    "type": "integer",
+                    "description": "Maximum number of results to return (0 = unlimited, default 0).",
+                },
             },
             "required": ["file_path"],
         },
@@ -289,6 +337,10 @@ TOOLS = [
                 "pattern": {
                     "type": "string",
                     "description": "Regular expression pattern to search for.",
+                },
+                "max_results": {
+                    "type": "integer",
+                    "description": "Maximum number of results to return (default 100, 0 = unlimited).",
                 },
             },
             "required": ["pattern"],
@@ -334,47 +386,61 @@ async def call_tool(name: str, arguments: dict) -> list[types.TextContent]:
 
         elif name == "list_files":
             pattern = arguments.get("pattern")
-            result = _query_fns["list_files"](pattern)
+            max_results = arguments.get("max_results", 0)
+            result = _query_fns["list_files"](pattern, max_results=max_results)
 
         elif name == "get_structure_summary":
             file_path = arguments.get("file_path")
             result = _query_fns["get_structure_summary"](file_path)
 
         elif name == "get_function_source":
+            max_lines = arguments.get("max_lines", 0)
             result = _query_fns["get_function_source"](
                 arguments["name"],
                 arguments.get("file_path"),
+                max_lines=max_lines,
             )
 
         elif name == "get_class_source":
+            max_lines = arguments.get("max_lines", 0)
             result = _query_fns["get_class_source"](
                 arguments["name"],
                 arguments.get("file_path"),
+                max_lines=max_lines,
             )
 
         elif name == "get_functions":
             file_path = arguments.get("file_path")
-            result = _query_fns["get_functions"](file_path)
+            max_results = arguments.get("max_results", 0)
+            result = _query_fns["get_functions"](file_path, max_results=max_results)
 
         elif name == "get_classes":
             file_path = arguments.get("file_path")
-            result = _query_fns["get_classes"](file_path)
+            max_results = arguments.get("max_results", 0)
+            result = _query_fns["get_classes"](file_path, max_results=max_results)
 
         elif name == "get_imports":
             file_path = arguments.get("file_path")
-            result = _query_fns["get_imports"](file_path)
+            max_results = arguments.get("max_results", 0)
+            result = _query_fns["get_imports"](file_path, max_results=max_results)
 
         elif name == "find_symbol":
             result = _query_fns["find_symbol"](arguments["name"])
 
         elif name == "get_dependencies":
-            result = _query_fns["get_dependencies"](arguments["name"])
+            max_results = arguments.get("max_results", 0)
+            result = _query_fns["get_dependencies"](arguments["name"], max_results=max_results)
 
         elif name == "get_dependents":
-            result = _query_fns["get_dependents"](arguments["name"])
+            max_results = arguments.get("max_results", 0)
+            result = _query_fns["get_dependents"](arguments["name"], max_results=max_results)
 
         elif name == "get_change_impact":
-            result = _query_fns["get_change_impact"](arguments["name"])
+            max_direct = arguments.get("max_direct", 0)
+            max_transitive = arguments.get("max_transitive", 0)
+            result = _query_fns["get_change_impact"](
+                arguments["name"], max_direct=max_direct, max_transitive=max_transitive
+            )
 
         elif name == "get_call_chain":
             result = _query_fns["get_call_chain"](
@@ -383,13 +449,20 @@ async def call_tool(name: str, arguments: dict) -> list[types.TextContent]:
             )
 
         elif name == "get_file_dependencies":
-            result = _query_fns["get_file_dependencies"](arguments["file_path"])
+            max_results = arguments.get("max_results", 0)
+            result = _query_fns["get_file_dependencies"](
+                arguments["file_path"], max_results=max_results
+            )
 
         elif name == "get_file_dependents":
-            result = _query_fns["get_file_dependents"](arguments["file_path"])
+            max_results = arguments.get("max_results", 0)
+            result = _query_fns["get_file_dependents"](
+                arguments["file_path"], max_results=max_results
+            )
 
         elif name == "search_codebase":
-            result = _query_fns["search_codebase"](arguments["pattern"])
+            max_results = arguments.get("max_results", 100)
+            result = _query_fns["search_codebase"](arguments["pattern"], max_results=max_results)
 
         else:
             return [TextContent(type="text", text=f"Error: unknown tool '{name}'")]

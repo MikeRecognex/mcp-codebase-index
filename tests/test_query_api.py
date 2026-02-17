@@ -667,6 +667,81 @@ class TestProjectQueryFunctions:
 
 
 # ---------------------------------------------------------------------------
+# Truncation / output size control tests
+# ---------------------------------------------------------------------------
+
+
+class TestOutputSizeControls:
+    """Tests for max_results and max_lines truncation parameters."""
+
+    def setup_method(self):
+        self.index = _make_project_index()
+        self.funcs = create_project_query_functions(self.index)
+
+    def test_get_functions_max_results(self):
+        all_funcs = self.funcs["get_functions"]()
+        assert len(all_funcs) == 6
+        limited = self.funcs["get_functions"](max_results=2)
+        assert len(limited) == 2
+
+    def test_get_functions_max_results_zero_unlimited(self):
+        result = self.funcs["get_functions"](max_results=0)
+        assert len(result) == 6
+
+    def test_get_classes_max_results(self):
+        limited = self.funcs["get_classes"](max_results=1)
+        assert len(limited) == 1
+
+    def test_get_imports_max_results(self):
+        all_imports = self.funcs["get_imports"]()
+        assert len(all_imports) == 3
+        limited = self.funcs["get_imports"](max_results=2)
+        assert len(limited) == 2
+
+    def test_list_files_max_results(self):
+        all_files = self.funcs["list_files"]()
+        assert len(all_files) == 3
+        limited = self.funcs["list_files"](max_results=1)
+        assert len(limited) == 1
+
+    def test_search_codebase_max_results(self):
+        limited = self.funcs["search_codebase"]("def ", max_results=2)
+        assert len(limited) <= 2
+
+    def test_get_change_impact_max_direct(self):
+        impact = self.funcs["get_change_impact"]("helper", max_direct=1)
+        assert len(impact["direct"]) <= 1
+
+    def test_get_change_impact_max_transitive(self):
+        impact = self.funcs["get_change_impact"]("helper", max_transitive=1)
+        assert len(impact["transitive"]) <= 1
+
+    def test_get_function_source_max_lines(self):
+        full = self.funcs["get_function_source"]("helper")
+        assert "truncated" not in full
+        truncated = self.funcs["get_function_source"]("helper", max_lines=1)
+        assert "truncated" in truncated
+        # Should have at most 1 line of actual source + the truncation message
+        lines = truncated.split("\n")
+        assert lines[-1].startswith("... (truncated to 1 lines)")
+
+    def test_get_class_source_max_lines(self):
+        full = self.funcs["get_class_source"]("Engine")
+        full_lines = full.split("\n")
+        assert len(full_lines) > 3
+        truncated = self.funcs["get_class_source"]("Engine", max_lines=3)
+        assert "truncated" in truncated
+        lines = truncated.split("\n")
+        # 3 source lines + 1 truncation message
+        assert len(lines) == 4
+
+    def test_get_function_source_max_lines_no_truncation_needed(self):
+        # If max_lines >= actual lines, no truncation message
+        src = self.funcs["get_function_source"]("helper", max_lines=100)
+        assert "truncated" not in src
+
+
+# ---------------------------------------------------------------------------
 # System prompt instructions
 # ---------------------------------------------------------------------------
 
