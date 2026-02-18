@@ -168,6 +168,44 @@ This ensures the AI reaches for surgical indexed queries first, which saves toke
 | `search_codebase` | Regex search across all files (max 100 results) |
 | `reindex` | Re-index the project after file changes (MCP server only) |
 
+## Benchmarks
+
+Tested across three real-world projects on an M-series MacBook Pro:
+
+### Index Build Performance
+
+| Project | Files | Lines | Functions | Classes | Index Time | Peak Memory |
+|---------|------:|------:|----------:|--------:|-----------:|------------:|
+| RMLPlus | 36 | 7,762 | 237 | 55 | 0.9s | 2.4 MB |
+| FastAPI | 2,556 | 332,160 | 4,139 | 617 | 5.7s | 55 MB |
+| Django | 3,714 | 707,493 | 29,995 | 7,371 | 36.2s | 126 MB |
+
+### Query Response Size vs Total Source
+
+| Query | RMLPlus (292K source) | FastAPI (12.2M source) | Django (26.3M source) |
+|-------|---:|---:|---:|
+| `find_symbol` | 61 chars | 68 chars | 62 chars |
+| `get_dependencies` | 94 chars | 56 chars | 327 chars |
+| `get_change_impact` | 1,255 chars | 61 chars | 195,640 chars |
+| `get_function_source` | 3,313 chars | 4,612 chars | 682 chars |
+
+`find_symbol` returns 61-68 characters regardless of whether the project is 7K lines or 707K lines. Response size scales with the answer, not the codebase.
+
+Django's `get_change_impact("AppConfig")` found 65 direct dependents and 5,078 transitive dependents — the kind of query that's impossible without a dependency graph. Use `max_direct` and `max_transitive` to cap output to your token budget.
+
+### Query Response Time
+
+All targeted queries return in sub-millisecond time, even on Django's 707K lines:
+
+| Query | RMLPlus | FastAPI | Django |
+|-------|--------:|--------:|-------:|
+| `find_symbol` | 0.01ms | 0.01ms | 0.03ms |
+| `get_dependencies` | 0.00ms | 0.00ms | 0.00ms |
+| `get_change_impact` | 0.02ms | 0.00ms | 2.81ms |
+| `get_function_source` | 0.01ms | 0.02ms | 0.03ms |
+
+Run the benchmarks yourself: `python benchmarks/benchmark.py`
+
 ## How Is This Different from LSP?
 
 LSP answers "where is this function?" — mcp-codebase-index answers "what happens if I change it?" LSP is point queries: one symbol, one file, one position. It can tell you where `LLMClient` is defined and who references it. But ask "what breaks transitively if I refactor `LLMClient`?" and LSP has nothing. This tool returns 11 direct dependents and 31 transitive impacts in a single call — 204 characters. To get the same answer from LSP, the AI would need to chain dozens of find-reference calls recursively, reading files at every step, burning thousands of tokens to reconstruct what the dependency graph already knows.
