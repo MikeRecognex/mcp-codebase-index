@@ -32,6 +32,7 @@ import fnmatch
 import json
 import os
 import sys
+import time
 import traceback
 
 from mcp.server import Server
@@ -54,6 +55,11 @@ _indexer: ProjectIndexer | None = None
 _query_fns: dict | None = None
 _is_git: bool = False
 
+# Session usage stats
+_session_start: float = time.time()
+_tool_call_counts: dict[str, int] = {}
+_total_chars_returned: int = 0
+
 
 def _format_result(value: object) -> str:
     """Format a query result as readable text."""
@@ -62,6 +68,66 @@ def _format_result(value: object) -> str:
     if isinstance(value, (dict, list)):
         return json.dumps(value, indent=2, default=str)
     return str(value)
+
+
+def _format_usage_stats() -> str:
+    """Format session usage statistics."""
+    elapsed = time.time() - _session_start
+    total_calls = sum(_tool_call_counts.values())
+    # Don't count get_usage_stats itself in the query total
+    query_calls = total_calls - _tool_call_counts.get("get_usage_stats", 0)
+
+    # Calculate total source size from the index
+    source_chars = 0
+    if _indexer and _indexer._project_index:
+        source_chars = sum(m.total_chars for m in _indexer._project_index.files.values())
+
+    lines = [
+        f"Session duration: {_format_duration(elapsed)}",
+        f"Total queries: {query_calls}",
+    ]
+
+    if _tool_call_counts:
+        lines.append("")
+        lines.append("Queries by tool:")
+        for tool_name, count in sorted(_tool_call_counts.items(), key=lambda x: -x[1]):
+            if tool_name == "get_usage_stats":
+                continue
+            lines.append(f"  {tool_name}: {count}")
+
+    lines.append("")
+    lines.append(f"Total chars returned: {_total_chars_returned:,}")
+
+    if source_chars > 0:
+        lines.append(f"Total source in index: {source_chars:,} chars")
+        if query_calls > 0 and source_chars > _total_chars_returned:
+            # Each query could have required reading the full source
+            naive_chars = source_chars * query_calls
+            reduction = (1 - _total_chars_returned / naive_chars) * 100 if naive_chars > 0 else 0
+            lines.append(
+                f"Estimated without indexer: {naive_chars:,} chars "
+                f"({naive_chars // 4:,} tokens) over {query_calls} queries"
+            )
+            lines.append(
+                f"Estimated with indexer: {_total_chars_returned:,} chars "
+                f"({_total_chars_returned // 4:,} tokens)"
+            )
+            lines.append(f"Estimated token savings: {reduction:.1f}%")
+
+    return "\n".join(lines)
+
+
+def _format_duration(seconds: float) -> str:
+    """Format seconds into a human-readable duration."""
+    if seconds < 60:
+        return f"{seconds:.0f}s"
+    minutes = int(seconds // 60)
+    secs = int(seconds % 60)
+    if minutes < 60:
+        return f"{minutes}m {secs}s"
+    hours = minutes // 60
+    mins = minutes % 60
+    return f"{hours}h {mins}m"
 
 
 def _build_index() -> None:
@@ -442,6 +508,14 @@ TOOLS = [
             "properties": {},
         },
     ),
+    Tool(
+        name="get_usage_stats",
+        description="Session efficiency stats: tool calls, characters returned vs total source, estimated token savings.",
+        inputSchema={
+            "type": "object",
+            "properties": {},
+        },
+    ),
 ]
 
 
@@ -457,13 +531,20 @@ async def list_tools() -> list[Tool]:
 
 @server.call_tool()
 async def call_tool(name: str, arguments: dict) -> list[types.TextContent]:
-    global _query_fns
+    global _query_fns, _total_chars_returned
+
+    # Track tool call counts (including reindex/stats themselves)
+    _tool_call_counts[name] = _tool_call_counts.get(name, 0) + 1
 
     try:
         # Handle reindex separately since it rebuilds state
         if name == "reindex":
             _build_index()
             return [TextContent(type="text", text="Project re-indexed successfully.")]
+
+        # Handle usage stats
+        if name == "get_usage_stats":
+            return [TextContent(type="text", text=_format_usage_stats())]
 
         _maybe_incremental_update()
 
@@ -557,7 +638,9 @@ async def call_tool(name: str, arguments: dict) -> list[types.TextContent]:
         else:
             return [TextContent(type="text", text=f"Error: unknown tool '{name}'")]
 
-        return [TextContent(type="text", text=_format_result(result))]
+        formatted = _format_result(result)
+        _total_chars_returned += len(formatted)
+        return [TextContent(type="text", text=formatted)]
 
     except Exception as e:
         tb = traceback.format_exc()
