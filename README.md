@@ -8,7 +8,7 @@
 [![MCP](https://img.shields.io/badge/MCP-compatible-purple.svg)](https://modelcontextprotocol.io)
 [![Zero Dependencies](https://img.shields.io/badge/dependencies-zero-brightgreen.svg)]()
 
-A structural codebase indexer with an [MCP](https://modelcontextprotocol.io) server for AI-assisted development. Zero runtime dependencies — uses Python's `ast` module for Python analysis and regex for TypeScript/JS. Requires Python 3.11+.
+A structural codebase indexer with an [MCP](https://modelcontextprotocol.io) server for AI-assisted development. Zero runtime dependencies — uses Python's `ast` module for Python analysis and regex-based parsing for TypeScript/JS, Go, and Rust. Requires Python 3.11+.
 
 ## What It Does
 
@@ -22,6 +22,8 @@ Indexes codebases by parsing source files into structural metadata -- functions,
 |----------|--------|----------|
 | Python (`.py`) | AST parsing | Functions, classes, methods, imports, dependency graph |
 | TypeScript/JS (`.ts`, `.tsx`, `.js`, `.jsx`) | Regex-based | Functions, arrow functions, classes, interfaces, type aliases, imports |
+| Go (`.go`) | Regex-based | Functions, methods (receiver-based), structs, interfaces, type aliases, imports, doc comments |
+| Rust (`.rs`) | Regex-based | Functions (`pub`/`async`/`const`/`unsafe`), structs, enums, traits, impl blocks, use statements, attributes, doc comments, macro_rules |
 | Markdown/Text (`.md`, `.txt`, `.rst`) | Heading detection | Sections (# headings, underlines, numbered, ALL-CAPS) |
 | Other | Generic | Line counts only |
 
@@ -216,7 +218,7 @@ Run the benchmarks yourself: `python benchmarks/benchmark.py`
 
 LSP answers "where is this function?" — mcp-codebase-index answers "what happens if I change it?" LSP is point queries: one symbol, one file, one position. It can tell you where `LLMClient` is defined and who references it. But ask "what breaks transitively if I refactor `LLMClient`?" and LSP has nothing. This tool returns 11 direct dependents and 31 transitive impacts in a single call — 204 characters. To get the same answer from LSP, the AI would need to chain dozens of find-reference calls recursively, reading files at every step, burning thousands of tokens to reconstruct what the dependency graph already knows.
 
-LSP also requires you to install a separate language server for every language in your project — pyright for Python, vtsls for TypeScript, gopls for Go. Each one is a heavyweight binary with its own dependencies and configuration. mcp-codebase-index is zero dependencies, handles Python + TypeScript/JS + Markdown out of the box, and every response has built-in token budget controls (`max_results`, `max_lines`). LSP was built for IDEs. This was built for AI.
+LSP also requires you to install a separate language server for every language in your project — pyright for Python, vtsls for TypeScript, gopls for Go. Each one is a heavyweight binary with its own dependencies and configuration. mcp-codebase-index is zero dependencies, handles Python + TypeScript/JS + Go + Rust + Markdown out of the box, and every response has built-in token budget controls (`max_results`, `max_lines`). LSP was built for IDEs. This was built for AI.
 
 ## Programmatic Usage
 
