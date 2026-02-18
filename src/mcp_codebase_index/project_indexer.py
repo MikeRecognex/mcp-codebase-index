@@ -53,6 +53,8 @@ class ProjectIndexer:
             "**/*.tsx",
             "**/*.js",
             "**/*.jsx",
+            "**/*.go",
+            "**/*.rs",
             "**/*.md",
             "**/*.txt",
         ]
@@ -63,6 +65,8 @@ class ProjectIndexer:
             "**/.venv/**",
             "**/venv/**",
             "**/*.egg-info/**",
+            "**/target/**",
+            "**/vendor/**",
         ]
         self.max_file_size_bytes = max_file_size_bytes
         self._project_index: ProjectIndex | None = None
@@ -468,6 +472,10 @@ class ProjectIndexer:
             return self._resolve_python_import(module_path, all_files)
         elif ext in (".ts", ".tsx", ".js", ".jsx"):
             return self._resolve_ts_import(importing_file, module_path, all_files)
+        elif ext == ".rs":
+            return self._resolve_rust_import(importing_file, module_path, all_files)
+        elif ext == ".go":
+            return self._resolve_go_import(module_path, all_files)
 
         return None
 
@@ -534,6 +542,90 @@ class ProjectIndexer:
             candidate = base + "/index" + ext
             if candidate in all_files:
                 return candidate
+
+        return None
+
+    def _resolve_rust_import(
+        self, importing_file: str, module_path: str, all_files: set[str]
+    ) -> str | None:
+        """Resolve a Rust use path to a project file.
+
+        Handles:
+        - crate::module::Item -> src/module.rs or src/module/mod.rs
+        - super::module -> parent dir
+        - self::module -> current dir
+        """
+        if not module_path:
+            return None
+
+        # Skip external crates (std, third-party)
+        if not module_path.startswith(('crate', 'super', 'self')):
+            return None
+
+        importing_dir = os.path.dirname(importing_file)
+
+        if module_path.startswith('crate::'):
+            # crate:: maps to src/
+            rel_module = module_path[len('crate::'):].replace('::', '/')
+            search_prefixes = ['src/', '']
+        elif module_path.startswith('super::'):
+            rel_module = module_path[len('super::'):].replace('::', '/')
+            parent = os.path.dirname(importing_dir)
+            search_prefixes = [parent + '/' if parent else '']
+        elif module_path.startswith('self::'):
+            rel_module = module_path[len('self::'):].replace('::', '/')
+            search_prefixes = [importing_dir + '/' if importing_dir else '']
+        else:
+            return None
+
+        for prefix in search_prefixes:
+            # Try as .rs file
+            candidate = (prefix + rel_module + '.rs').replace(os.sep, '/')
+            if candidate in all_files:
+                return candidate
+            # Try as mod.rs
+            candidate = (prefix + rel_module + '/mod.rs').replace(os.sep, '/')
+            if candidate in all_files:
+                return candidate
+            # Try parent module (e.g., use crate::module::Item -> src/module.rs)
+            parts = rel_module.rsplit('/', 1)
+            if len(parts) == 2:
+                candidate = (prefix + parts[0] + '.rs').replace(os.sep, '/')
+                if candidate in all_files:
+                    return candidate
+                candidate = (prefix + parts[0] + '/mod.rs').replace(os.sep, '/')
+                if candidate in all_files:
+                    return candidate
+
+        return None
+
+    def _resolve_go_import(
+        self, module_path: str, all_files: set[str]
+    ) -> str | None:
+        """Resolve a Go import path to a project directory's .go files.
+
+        Matches import path suffixes against project directories containing .go files.
+        """
+        if not module_path:
+            return None
+
+        # Build a mapping of directory -> any .go file in that dir
+        dir_to_file: dict[str, str] = {}
+        for f in all_files:
+            if f.endswith('.go'):
+                d = os.path.dirname(f)
+                if d not in dir_to_file:
+                    dir_to_file[d] = f
+
+        # Try matching the import path suffix against directory paths
+        # e.g., "github.com/user/repo/pkg/utils" -> look for dirs ending with "pkg/utils"
+        path_parts = module_path.split('/')
+        for length in range(len(path_parts), 0, -1):
+            suffix = '/'.join(path_parts[-length:])
+            for d, f in dir_to_file.items():
+                normalized = d.replace(os.sep, '/')
+                if normalized == suffix or normalized.endswith('/' + suffix):
+                    return f
 
         return None
 

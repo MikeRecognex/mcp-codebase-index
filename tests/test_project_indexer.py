@@ -471,6 +471,193 @@ class TestStats:
 # ---------------------------------------------------------------------------
 
 
+@pytest.fixture
+def go_project(tmp_path):
+    """Create a small Go project with imports."""
+    root = tmp_path / "goproject"
+    root.mkdir()
+
+    pkg = root / "pkg" / "utils"
+    pkg.mkdir(parents=True)
+
+    (pkg / "utils.go").write_text(
+        textwrap.dedent("""\
+        package utils
+
+        // FormatName formats a name string.
+        func FormatName(name string) string {
+            return name
+        }
+
+        // Validate checks input validity.
+        func Validate(input string) bool {
+            return len(input) > 0
+        }
+        """)
+    )
+
+    cmd = root / "cmd"
+    cmd.mkdir()
+
+    (cmd / "main.go").write_text(
+        textwrap.dedent("""\
+        package main
+
+        import "goproject/pkg/utils"
+
+        // App is the main application struct.
+        type App struct {
+            Name string
+        }
+
+        func (a *App) Run() {
+            utils.FormatName(a.Name)
+        }
+
+        func main() {
+            app := &App{Name: "test"}
+            app.Run()
+        }
+        """)
+    )
+
+    return root
+
+
+@pytest.fixture
+def rust_project(tmp_path):
+    """Create a small Rust project with imports."""
+    root = tmp_path / "rustproject"
+    root.mkdir()
+
+    src = root / "src"
+    src.mkdir()
+
+    (src / "lib.rs").write_text(
+        textwrap.dedent("""\
+        pub mod models;
+        pub mod utils;
+
+        use crate::models::Config;
+        use crate::utils::format_name;
+
+        /// Create a default config.
+        pub fn default_config() -> Config {
+            Config { name: format_name("default") }
+        }
+        """)
+    )
+
+    (src / "models.rs").write_text(
+        textwrap.dedent("""\
+        /// A configuration struct.
+        #[derive(Debug, Clone)]
+        pub struct Config {
+            pub name: String,
+        }
+
+        impl Config {
+            pub fn new(name: String) -> Self {
+                Config { name }
+            }
+        }
+        """)
+    )
+
+    (src / "utils.rs").write_text(
+        textwrap.dedent("""\
+        /// Format a name string.
+        pub fn format_name(name: &str) -> String {
+            name.trim().to_string()
+        }
+        """)
+    )
+
+    return root
+
+
+class TestGoProject:
+    def test_discovers_go_files(self, go_project):
+        indexer = ProjectIndexer(
+            str(go_project),
+            include_patterns=["**/*.go"],
+        )
+        idx = indexer.index()
+        go_files = [f for f in idx.files if f.endswith(".go")]
+        assert len(go_files) == 2
+
+    def test_go_symbol_table(self, go_project):
+        indexer = ProjectIndexer(
+            str(go_project),
+            include_patterns=["**/*.go"],
+        )
+        idx = indexer.index()
+        assert "FormatName" in idx.symbol_table
+        assert "Validate" in idx.symbol_table
+        assert "App" in idx.symbol_table
+        assert "main" in idx.symbol_table
+
+    def test_go_methods_detected(self, go_project):
+        indexer = ProjectIndexer(
+            str(go_project),
+            include_patterns=["**/*.go"],
+        )
+        idx = indexer.index()
+        assert "App.Run" in idx.symbol_table
+
+
+class TestRustProject:
+    def test_discovers_rust_files(self, rust_project):
+        indexer = ProjectIndexer(
+            str(rust_project),
+            include_patterns=["**/*.rs"],
+        )
+        idx = indexer.index()
+        rs_files = [f for f in idx.files if f.endswith(".rs")]
+        assert len(rs_files) == 3
+
+    def test_rust_symbol_table(self, rust_project):
+        indexer = ProjectIndexer(
+            str(rust_project),
+            include_patterns=["**/*.rs"],
+        )
+        idx = indexer.index()
+        assert "Config" in idx.symbol_table
+        assert "format_name" in idx.symbol_table
+        assert "default_config" in idx.symbol_table
+
+    def test_rust_impl_methods(self, rust_project):
+        indexer = ProjectIndexer(
+            str(rust_project),
+            include_patterns=["**/*.rs"],
+        )
+        idx = indexer.index()
+        assert "Config.new" in idx.symbol_table
+
+    def test_rust_import_resolution(self, rust_project):
+        indexer = ProjectIndexer(
+            str(rust_project),
+            include_patterns=["**/*.rs"],
+        )
+        idx = indexer.index()
+
+        lib_path = None
+        models_path = None
+        utils_path = None
+        for f in idx.files:
+            if f.endswith("lib.rs"):
+                lib_path = f
+            elif f.endswith("models.rs"):
+                models_path = f
+            elif f.endswith("utils.rs"):
+                utils_path = f
+
+        assert lib_path is not None
+        if lib_path in idx.import_graph:
+            imports = idx.import_graph[lib_path]
+            assert models_path in imports or utils_path in imports
+
+
 class TestIntegration:
     def test_index_mcp_codebase_index_source(self):
         """Index the actual mcp-codebase-index src directory as an integration test."""

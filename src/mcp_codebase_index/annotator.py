@@ -19,8 +19,10 @@
 """Dispatch layer that selects the appropriate annotator by file type."""
 
 from mcp_codebase_index.generic_annotator import annotate_generic
+from mcp_codebase_index.go_annotator import annotate_go
 from mcp_codebase_index.models import StructuralMetadata
 from mcp_codebase_index.python_annotator import annotate_python
+from mcp_codebase_index.rust_annotator import annotate_rust
 from mcp_codebase_index.text_annotator import annotate_text
 from mcp_codebase_index.typescript_annotator import annotate_typescript
 
@@ -34,6 +36,8 @@ _EXTENSION_MAP: dict[str, str] = {
     ".tsx": "typescript",
     ".js": "javascript",
     ".jsx": "javascript",
+    ".go": "go",
+    ".rs": "rust",
 }
 
 
@@ -50,6 +54,8 @@ def annotate(
     - .md, .txt, .rst -> text annotator
     - .ts, .tsx -> typescript annotator
     - .js, .jsx -> typescript annotator (close enough for regex-based parsing)
+    - .go -> go annotator
+    - .rs -> rust annotator
     - Otherwise -> generic annotator (line-only)
     """
     if file_type is None:
@@ -65,5 +71,9 @@ def annotate(
         return annotate_text(text, source_name)
     elif file_type in ("typescript", "javascript"):
         return annotate_typescript(text, source_name)
+    elif file_type == "go":
+        return annotate_go(text, source_name)
+    elif file_type == "rust":
+        return annotate_rust(text, source_name)
     else:
         return annotate_generic(text, source_name)
