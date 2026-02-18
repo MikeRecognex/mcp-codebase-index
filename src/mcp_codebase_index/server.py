@@ -28,6 +28,7 @@ Usage:
 
 from __future__ import annotations
 
+import fnmatch
 import json
 import os
 import sys
@@ -38,6 +39,7 @@ from mcp.server.stdio import stdio_server
 from mcp.types import Tool, TextContent
 import mcp.types as types
 
+from mcp_codebase_index.git_tracker import is_git_repo, get_head_commit, get_changed_files
 from mcp_codebase_index.project_indexer import ProjectIndexer
 from mcp_codebase_index.query_api import create_project_query_functions
 
@@ -50,6 +52,7 @@ server = Server("mcp-codebase-index")
 _project_root: str = ""
 _indexer: ProjectIndexer | None = None
 _query_fns: dict | None = None
+_is_git: bool = False
 
 
 def _format_result(value: object) -> str:
@@ -63,7 +66,7 @@ def _format_result(value: object) -> str:
 
 def _build_index() -> None:
     """Build (or rebuild) the project index and query functions."""
-    global _project_root, _indexer, _query_fns
+    global _project_root, _indexer, _query_fns, _is_git
 
     _project_root = os.environ.get("PROJECT_ROOT", os.getcwd())
     print(f"[mcp-codebase-index] Indexing project: {_project_root}", file=sys.stderr)
@@ -72,12 +75,79 @@ def _build_index() -> None:
     index = _indexer.index()
     _query_fns = create_project_query_functions(index)
 
+    _is_git = is_git_repo(_project_root)
+    if _is_git:
+        index.last_indexed_git_ref = get_head_commit(_project_root)
+
     print(
         f"[mcp-codebase-index] Indexed {index.total_files} files, "
         f"{index.total_lines} lines, "
         f"{index.total_functions} functions, "
         f"{index.total_classes} classes "
         f"in {index.index_build_time_seconds:.2f}s",
+        file=sys.stderr,
+    )
+
+
+def _matches_include_patterns(rel_path: str, patterns: list[str]) -> bool:
+    """Check if a relative path matches any of the include glob patterns."""
+    normalized = rel_path.replace(os.sep, "/")
+    for pattern in patterns:
+        if fnmatch.fnmatch(normalized, pattern):
+            return True
+    return False
+
+
+def _maybe_incremental_update() -> None:
+    """Check git for changes and incrementally update the index if needed."""
+    if not _is_git or _indexer is None or _indexer._project_index is None:
+        return
+
+    idx = _indexer._project_index
+    changeset = get_changed_files(_project_root, idx.last_indexed_git_ref)
+    if changeset.is_empty:
+        return
+
+    total_changes = len(changeset.modified) + len(changeset.added) + len(changeset.deleted)
+
+    # Large changeset threshold: full rebuild for branch switches etc.
+    if total_changes > 20 and total_changes > idx.total_files * 0.5:
+        print(
+            f"[mcp-codebase-index] Large changeset ({total_changes} files), "
+            f"doing full rebuild",
+            file=sys.stderr,
+        )
+        _build_index()
+        return
+
+    # Process deletions
+    for path in changeset.deleted:
+        if path in idx.files:
+            _indexer.remove_file(path)
+
+    # Process modifications and additions
+    for path in changeset.modified + changeset.added:
+        if _indexer._is_excluded(path):
+            continue
+        if not _matches_include_patterns(path, _indexer.include_patterns):
+            continue
+        abs_path = os.path.join(_project_root, path)
+        if not os.path.isfile(abs_path):
+            continue
+        _indexer.reindex_file(path, skip_graph_rebuild=True)
+
+    # Rebuild cross-file graphs once
+    _indexer.rebuild_graphs()
+
+    # Update the git ref
+    idx.last_indexed_git_ref = get_head_commit(_project_root)
+
+    n_mod = len(changeset.modified)
+    n_add = len(changeset.added)
+    n_del = len(changeset.deleted)
+    print(
+        f"[mcp-codebase-index] Incremental update: "
+        f"{n_mod} modified, {n_add} added, {n_del} deleted",
         file=sys.stderr,
     )
 
@@ -394,6 +464,8 @@ async def call_tool(name: str, arguments: dict) -> list[types.TextContent]:
         if name == "reindex":
             _build_index()
             return [TextContent(type="text", text="Project re-indexed successfully.")]
+
+        _maybe_incremental_update()
 
         if _query_fns is None:
             return [TextContent(type="text", text="Error: index not built yet. Call reindex first.")]

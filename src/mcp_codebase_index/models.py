@@ -126,3 +126,6 @@ class ProjectIndex:
     total_classes: int = 0
     index_build_time_seconds: float = 0.0
     index_memory_bytes: int = 0
+
+    # Git tracking
+    last_indexed_git_ref: str | None = None

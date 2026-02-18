@@ -14,6 +14,8 @@ A structural codebase indexer with an [MCP](https://modelcontextprotocol.io) ser
 
 Indexes codebases by parsing source files into structural metadata -- functions, classes, imports, dependency graphs, and cross-file call chains -- then exposes 17 query tools via the Model Context Protocol, enabling Claude Code and other MCP clients to navigate codebases efficiently without reading entire files.
 
+**Automatic incremental re-indexing:** In git repositories, the index stays up to date automatically. Before every query, the server checks `git diff` and `git status` (~1-2ms). If files changed, only those files are re-parsed and the dependency graph is rebuilt. No need to manually call `reindex` after edits, branch switches, or pulls.
+
 ## Language Support
 
 | Language | Method | Extracts |
@@ -166,7 +168,7 @@ This ensures the AI reaches for surgical indexed queries first, which saves toke
 | `get_file_dependencies` | Files imported by a given file |
 | `get_file_dependents` | Files that import from a given file |
 | `search_codebase` | Regex search across all files (max 100 results) |
-| `reindex` | Re-index the project after file changes (MCP server only) |
+| `reindex` | Force full re-index (rarely needed — incremental updates happen automatically in git repos) |
 
 ## Benchmarks
 

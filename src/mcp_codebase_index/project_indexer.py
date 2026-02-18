@@ -161,11 +161,14 @@ class ProjectIndexer:
 
         return self._project_index
 
-    def reindex_file(self, file_path: str) -> None:
+    def reindex_file(self, file_path: str, skip_graph_rebuild: bool = False) -> None:
         """Re-index a single file. Updates the existing ProjectIndex in place.
 
         Args:
             file_path: Path to the file (absolute or relative to root_path).
+            skip_graph_rebuild: If True, skip rebuilding cross-file graphs.
+                Use when batching multiple reindex calls, then call
+                rebuild_graphs() once at the end.
         """
         if self._project_index is None:
             raise RuntimeError("Cannot reindex before initial index() call.")
@@ -240,10 +243,78 @@ class ProjectIndexer:
         else:
             idx.import_graph.pop(rel_path, None)
 
-        # Rebuild reverse import graph
-        idx.reverse_import_graph = self._build_reverse_graph(idx.import_graph)
+        if not skip_graph_rebuild:
+            # Rebuild reverse import graph
+            idx.reverse_import_graph = self._build_reverse_graph(idx.import_graph)
 
-        # Rebuild global dependency graphs (full rebuild is simplest for correctness)
+            # Rebuild global dependency graphs (full rebuild is simplest for correctness)
+            idx.global_dependency_graph = self._build_global_dependency_graph(
+                idx.files, idx.symbol_table
+            )
+            idx.reverse_dependency_graph = self._build_reverse_graph(
+                idx.global_dependency_graph
+            )
+
+    def remove_file(self, file_path: str) -> None:
+        """Remove a file from the index. Does NOT rebuild cross-file graphs.
+
+        Call rebuild_graphs() after batching multiple remove/reindex operations.
+
+        Args:
+            file_path: Path to the file (absolute or relative to root_path).
+        """
+        if self._project_index is None:
+            raise RuntimeError("Cannot remove_file before initial index() call.")
+
+        # Normalize to relative path
+        abs_path = (
+            os.path.abspath(file_path)
+            if os.path.isabs(file_path)
+            else os.path.join(self.root_path, file_path)
+        )
+        rel_path = os.path.relpath(abs_path, self.root_path)
+
+        idx = self._project_index
+        old_metadata = idx.files.get(rel_path)
+        if old_metadata is None:
+            return
+
+        # Remove old symbols from symbol table
+        for func in old_metadata.functions:
+            if idx.symbol_table.get(func.qualified_name) == rel_path:
+                del idx.symbol_table[func.qualified_name]
+            if idx.symbol_table.get(func.name) == rel_path:
+                del idx.symbol_table[func.name]
+        for cls in old_metadata.classes:
+            if idx.symbol_table.get(cls.name) == rel_path:
+                del idx.symbol_table[cls.name]
+
+        # Remove from import graphs
+        idx.import_graph.pop(rel_path, None)
+        for targets in idx.reverse_import_graph.values():
+            targets.discard(rel_path)
+
+        # Update stats
+        idx.total_lines -= old_metadata.total_lines
+        idx.total_functions -= len(old_metadata.functions)
+        idx.total_classes -= len(old_metadata.classes)
+
+        # Remove the file entry
+        del idx.files[rel_path]
+        idx.total_files = len(idx.files)
+
+    def rebuild_graphs(self) -> None:
+        """Rebuild all cross-file graphs from current file data.
+
+        Call after batching multiple remove_file() / reindex_file(skip_graph_rebuild=True)
+        operations.
+        """
+        if self._project_index is None:
+            raise RuntimeError("Cannot rebuild_graphs before initial index() call.")
+
+        idx = self._project_index
+        idx.import_graph = self._build_import_graph(idx.files)
+        idx.reverse_import_graph = self._build_reverse_graph(idx.import_graph)
         idx.global_dependency_graph = self._build_global_dependency_graph(
             idx.files, idx.symbol_table
         )
