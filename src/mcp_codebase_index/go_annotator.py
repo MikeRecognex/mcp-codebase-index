@@ -398,7 +398,6 @@ def annotate_go(source: str, source_name: str = "<source>") -> StructuralMetadat
         # Method declaration (check before function - more specific pattern)
         mm = _METHOD_RE.match(stripped)
         if mm:
-            receiver_name = mm.group(1)
             receiver_type = mm.group(2)
             method_name = mm.group(3)
             params = _extract_params(mm.group(5))
