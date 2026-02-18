@@ -170,7 +170,7 @@ This ensures the AI reaches for surgical indexed queries first, which saves toke
 
 ## Benchmarks
 
-Tested across three real-world projects on an M-series MacBook Pro:
+Tested across four real-world projects on an M-series MacBook Pro, from a small project to CPython itself (1.1 million lines):
 
 ### Index Build Performance
 
@@ -179,30 +179,34 @@ Tested across three real-world projects on an M-series MacBook Pro:
 | RMLPlus | 36 | 7,762 | 237 | 55 | 0.9s | 2.4 MB |
 | FastAPI | 2,556 | 332,160 | 4,139 | 617 | 5.7s | 55 MB |
 | Django | 3,714 | 707,493 | 29,995 | 7,371 | 36.2s | 126 MB |
+| **CPython** | **2,464** | **1,115,334** | **59,620** | **9,037** | **55.9s** | **197 MB** |
 
 ### Query Response Size vs Total Source
 
-| Query | RMLPlus (292K source) | FastAPI (12.2M source) | Django (26.3M source) |
-|-------|---:|---:|---:|
-| `find_symbol` | 61 chars | 68 chars | 62 chars |
-| `get_dependencies` | 94 chars | 56 chars | 327 chars |
-| `get_change_impact` | 1,255 chars | 61 chars | 195,640 chars |
-| `get_function_source` | 3,313 chars | 4,612 chars | 682 chars |
+Querying CPython — 41 million characters of source code:
 
-`find_symbol` returns 61-68 characters regardless of whether the project is 7K lines or 707K lines. Response size scales with the answer, not the codebase.
+| Query | Response | Total Source | Reduction |
+|-------|-------:|------------:|----------:|
+| `find_symbol("TestCase")` | 67 chars | 41,077,561 chars | **99.9998%** |
+| `get_dependencies("compile")` | 115 chars | 41,077,561 chars | **99.9997%** |
+| `get_change_impact("TestCase")` | 16,812 chars | 41,077,561 chars | **99.96%** |
+| `get_function_source("compile")` | 4,531 chars | 41,077,561 chars | **99.99%** |
+| `get_function_source("run_unittest")` | 439 chars | 41,077,561 chars | **99.999%** |
 
-Django's `get_change_impact("AppConfig")` found 65 direct dependents and 5,078 transitive dependents — the kind of query that's impossible without a dependency graph. Use `max_direct` and `max_transitive` to cap output to your token budget.
+`find_symbol` returns 54-67 characters regardless of whether the project is 7K lines or 1.1M lines. Response size scales with the answer, not the codebase.
+
+`get_change_impact("TestCase")` on CPython found **154 direct dependents and 492 transitive dependents** in 0.45ms — the kind of query that's impossible without a dependency graph. Use `max_direct` and `max_transitive` to cap output to your token budget.
 
 ### Query Response Time
 
-All targeted queries return in sub-millisecond time, even on Django's 707K lines:
+All targeted queries return in sub-millisecond time, even on CPython's 1.1M lines:
 
-| Query | RMLPlus | FastAPI | Django |
-|-------|--------:|--------:|-------:|
-| `find_symbol` | 0.01ms | 0.01ms | 0.03ms |
-| `get_dependencies` | 0.00ms | 0.00ms | 0.00ms |
-| `get_change_impact` | 0.02ms | 0.00ms | 2.81ms |
-| `get_function_source` | 0.01ms | 0.02ms | 0.03ms |
+| Query | RMLPlus | FastAPI | Django | CPython |
+|-------|--------:|--------:|-------:|--------:|
+| `find_symbol` | 0.01ms | 0.01ms | 0.03ms | 0.08ms |
+| `get_dependencies` | 0.00ms | 0.00ms | 0.00ms | 0.01ms |
+| `get_change_impact` | 0.02ms | 0.00ms | 2.81ms | 0.45ms |
+| `get_function_source` | 0.01ms | 0.02ms | 0.03ms | 0.10ms |
 
 Run the benchmarks yourself: `python benchmarks/benchmark.py`
 

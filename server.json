@@ -1,0 +1,27 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.MikeRecognex/mcp-codebase-index",
+  "description": "Structural codebase indexer with 17 query tools. 87% token reduction. Zero dependencies.",
+  "repository": {
+    "url": "https://github.com/MikeRecognex/mcp-codebase-index",
+    "source": "github"
+  },
+  "version": "0.2.2",
+  "packages": [
+    {
+      "registryType": "pypi",
+      "identifier": "mcp-codebase-index",
+      "version": "0.2.2",
+      "transport": {
+        "type": "stdio"
+      },
+      "environment_variables": [
+        {
+          "name": "PROJECT_ROOT",
+          "description": "Root directory of the project to index",
+          "required": true
+        }
+      ]
+    }
+  ]
+}
