@@ -138,17 +138,24 @@ Or using the Python module directly (useful if installed in a virtualenv):
 }
 ```
 
-### Tip: Encourage the AI to Use Indexed Tools
+### Important: Make the AI Actually Use Indexed Tools
 
-By default, AI assistants may still read entire files instead of using the indexed tools. Add this to your project's `CLAUDE.md` (or equivalent instructions file) to nudge it:
+By default, AI assistants will ignore the indexed tools and fall back to reading entire files with Glob/Grep/Read. Soft language like "prefer" gets rationalized away. Add this to your project's `CLAUDE.md` (or equivalent instructions file) with **mandatory** language:
 
 ```
-Prefer using codebase-index MCP tools (get_project_summary, find_symbol, get_function_source,
-get_class_source, get_dependencies, get_dependents, get_change_impact, get_call_chain, etc.)
-over reading entire files when navigating the codebase.
+## Codebase Navigation — MANDATORY
+
+You MUST use codebase-index MCP tools FIRST when exploring or navigating the codebase. This is not optional.
+
+- ALWAYS start with: get_project_summary, find_symbol, get_function_source, get_class_source,
+  get_structure_summary, get_dependencies, get_dependents, get_change_impact, get_call_chain, search_codebase
+- Only fall back to Read/Glob/Grep when codebase-index tools genuinely don't have what you need
+  (e.g. reading non-code files, config, frontmatter)
+- If you catch yourself reaching for Glob/Grep/Read to find or understand code, STOP and use
+  codebase-index instead
 ```
 
-This ensures the AI reaches for surgical indexed queries first, which saves tokens and context window.
+The word "prefer" is too weak — models treat it as a suggestion and default to familiar tools. Mandatory language with explicit fallback criteria is what actually changes behavior.
 
 ### Available Tools (18)
 
