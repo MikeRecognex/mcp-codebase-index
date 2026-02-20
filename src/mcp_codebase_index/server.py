@@ -60,6 +60,27 @@ _session_start: float = time.time()
 _tool_call_counts: dict[str, int] = {}
 _total_chars_returned: int = 0
 
+# Realistic estimate of what % of codebase you'd need to read without the indexer
+_TOOL_COST_MULTIPLIERS: dict[str, float] = {
+    "get_project_summary": 0.10,
+    "list_files": 0.01,
+    "get_structure_summary": 0.05,
+    "get_functions": 0.05,
+    "get_classes": 0.05,
+    "get_imports": 0.03,
+    "get_function_source": 0.02,
+    "get_class_source": 0.03,
+    "find_symbol": 0.05,
+    "get_dependencies": 0.10,
+    "get_dependents": 0.15,
+    "get_change_impact": 0.30,
+    "get_call_chain": 0.20,
+    "get_file_dependencies": 0.02,
+    "get_file_dependents": 0.10,
+    "search_codebase": 0.15,
+    "reindex": 0.0,
+}
+
 
 def _format_result(value: object) -> str:
     """Format a query result as readable text."""
@@ -101,8 +122,13 @@ def _format_usage_stats() -> str:
     if source_chars > 0:
         lines.append(f"Total source in index: {source_chars:,} chars")
         if query_calls > 0 and source_chars > _total_chars_returned:
-            # Each query could have required reading the full source
-            naive_chars = source_chars * query_calls
+            # Per-tool estimate of what you'd read without the indexer
+            naive_chars = 0
+            for tool_name, count in _tool_call_counts.items():
+                if tool_name == "get_usage_stats":
+                    continue
+                multiplier = _TOOL_COST_MULTIPLIERS.get(tool_name, 0.10)
+                naive_chars += int(source_chars * multiplier * count)
             reduction = (1 - _total_chars_returned / naive_chars) * 100 if naive_chars > 0 else 0
             lines.append(
                 f"Estimated without indexer: {naive_chars:,} chars "

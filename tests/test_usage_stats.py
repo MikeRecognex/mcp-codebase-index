@@ -88,7 +88,8 @@ class TestFormatUsageStats:
         assert "Total source in index:" in result
         assert "Estimated token savings:" in result
 
-    def test_token_savings_calculation(self, tmp_path):
+    def test_token_savings_uses_per_tool_multipliers(self, tmp_path):
+        """Naive estimate should use per-tool cost multipliers, not full codebase per query."""
         import mcp_codebase_index.server as srv
         from mcp_codebase_index.project_indexer import ProjectIndexer
 
@@ -99,14 +100,63 @@ class TestFormatUsageStats:
         indexer.index()
         srv._indexer = indexer
 
+        source_chars = sum(m.total_chars for m in indexer._project_index.files.values())
+
+        # find_symbol has multiplier 0.05, so 10 calls = source_chars * 0.05 * 10
         srv._tool_call_counts["find_symbol"] = 10
         srv._total_chars_returned = 500
 
         result = srv._format_usage_stats()
         assert "Estimated without indexer:" in result
         assert "Estimated with indexer:" in result
-        # 500 chars returned vs 6000 * 10 = 60000 naive
         assert "tokens" in result
+
+        # The naive estimate should be source_chars * 0.05 * 10, NOT source_chars * 10
+        expected_naive = int(source_chars * 0.05 * 10)
+        assert f"{expected_naive:,} chars" in result
+
+    def test_different_tools_produce_different_costs(self, tmp_path):
+        """Tools with different multipliers should produce different naive estimates."""
+        import mcp_codebase_index.server as srv
+        from mcp_codebase_index.project_indexer import ProjectIndexer
+
+        (tmp_path / "code.py").write_text("x = 1\n" * 1000)
+
+        indexer = ProjectIndexer(str(tmp_path), include_patterns=["**/*.py"])
+        indexer.index()
+        srv._indexer = indexer
+
+        source_chars = sum(m.total_chars for m in indexer._project_index.files.values())
+
+        # Test with a cheap tool (list_files: 0.01)
+        srv._tool_call_counts["list_files"] = 1
+        srv._total_chars_returned = 50
+        result_cheap = srv._format_usage_stats()
+
+        # Reset and test with an expensive tool (get_change_impact: 0.30)
+        srv._tool_call_counts.clear()
+        srv._total_chars_returned = 50
+        srv._tool_call_counts["get_change_impact"] = 1
+        result_expensive = srv._format_usage_stats()
+
+        # Extract the "Estimated without indexer" numbers
+        def extract_naive(text: str) -> int:
+            for line in text.splitlines():
+                if "Estimated without indexer:" in line:
+                    # Format: "Estimated without indexer: N chars (M tokens) over Q queries"
+                    num_str = line.split(":")[1].split("chars")[0].strip().replace(",", "")
+                    return int(num_str)
+            return 0
+
+        cheap_naive = extract_naive(result_cheap)
+        expensive_naive = extract_naive(result_expensive)
+
+        assert cheap_naive > 0
+        assert expensive_naive > 0
+        assert expensive_naive > cheap_naive
+        # Verify exact values based on multipliers
+        assert cheap_naive == int(source_chars * 0.01)
+        assert expensive_naive == int(source_chars * 0.30)
 
     def test_no_savings_section_without_index(self):
         import mcp_codebase_index.server as srv
