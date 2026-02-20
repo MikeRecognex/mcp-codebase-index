@@ -12,7 +12,7 @@ A structural codebase indexer with an [MCP](https://modelcontextprotocol.io) ser
 
 ## What It Does
 
-Indexes codebases by parsing source files into structural metadata -- functions, classes, imports, dependency graphs, and cross-file call chains -- then exposes 17 query tools via the Model Context Protocol, enabling Claude Code and other MCP clients to navigate codebases efficiently without reading entire files.
+Indexes codebases by parsing source files into structural metadata -- functions, classes, imports, dependency graphs, and cross-file call chains -- then exposes 18 query tools via the Model Context Protocol, enabling Claude Code and other MCP clients to navigate codebases efficiently without reading entire files.
 
 **Automatic incremental re-indexing:** In git repositories, the index stays up to date automatically. Before every query, the server checks `git diff` and `git status` (~1-2ms). If files changed, only those files are re-parsed and the dependency graph is rebuilt. No need to manually call `reindex` after edits, branch switches, or pulls.
 
@@ -97,9 +97,9 @@ Restart OpenClaw and verify the connection:
 openclaw mcp list
 ```
 
-All 17 tools will be available to your agent.
+All 18 tools will be available to your agent.
 
-**Performance note:** OpenClaw's default MCP integration via mcporter spawns a fresh server process per tool call, which means the index is rebuilt each time (~1-2s for small projects, longer for large ones). For persistent connections, use the [openclaw-mcp-adapter](https://github.com/androidStern-personal/openclaw-mcp-adapter) plugin, which connects once at startup and keeps the server running:
+**Performance note:** The server automatically detects file changes via `git diff` before every query (~1-2ms) and incrementally re-indexes only what changed. However, OpenClaw's default MCP integration via mcporter spawns a fresh server process per tool call, which discards the in-memory index and forces a full rebuild each time (~1-2s for small projects, longer for large ones). This is a mcporter process lifecycle limitation, not a server limitation. For persistent connections, use the [openclaw-mcp-adapter](https://github.com/androidStern-personal/openclaw-mcp-adapter) plugin, which connects once at startup and keeps the server running:
 
 ```bash
 pip install openclaw-mcp-adapter
@@ -150,7 +150,7 @@ over reading entire files when navigating the codebase.
 
 This ensures the AI reaches for surgical indexed queries first, which saves tokens and context window.
 
-### Available Tools (17)
+### Available Tools (18)
 
 | Tool | Description |
 |------|-------------|
@@ -171,6 +171,7 @@ This ensures the AI reaches for surgical indexed queries first, which saves toke
 | `get_file_dependents` | Files that import from a given file |
 | `search_codebase` | Regex search across all files (max 100 results) |
 | `reindex` | Force full re-index (rarely needed — incremental updates happen automatically in git repos) |
+| `get_usage_stats` | Session efficiency stats: tool calls, characters returned vs total source, estimated token savings |
 
 ## Benchmarks
 
