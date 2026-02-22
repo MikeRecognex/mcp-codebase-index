@@ -156,6 +156,19 @@ def _format_duration(seconds: float) -> str:
     return f"{hours}h {mins}m"
 
 
+def _ensure_index() -> None:
+    """Build the project index on first use (lazy initialization).
+
+    This is called on the first tool call rather than at startup so that
+    the MCP server can complete its initialization handshake immediately.
+    Without this, large projects would cause Claude Code to timeout waiting
+    for the server to become ready.
+    """
+    if _indexer is not None:
+        return
+    _build_index()
+
+
 def _build_index() -> None:
     """Build (or rebuild) the project index and query functions."""
     global _project_root, _indexer, _query_fns, _is_git
@@ -563,6 +576,10 @@ async def call_tool(name: str, arguments: dict) -> list[types.TextContent]:
     _tool_call_counts[name] = _tool_call_counts.get(name, 0) + 1
 
     try:
+        # Lazy initialization: build the index on first tool call so the
+        # MCP handshake completes without waiting for indexing.
+        _ensure_index()
+
         # Handle reindex separately since it rebuilds state
         if name == "reindex":
             _build_index()
@@ -680,7 +697,6 @@ async def call_tool(name: str, arguments: dict) -> list[types.TextContent]:
 
 
 async def main():
-    _build_index()
     async with stdio_server() as (read_stream, write_stream):
         await server.run(
             read_stream,
