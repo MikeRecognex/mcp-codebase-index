@@ -16,6 +16,8 @@ Indexes codebases by parsing source files into structural metadata -- functions,
 
 **Automatic incremental re-indexing:** In git repositories, the index stays up to date automatically. Before every query, the server checks `git diff` and `git status` (~1-2ms). If files changed, only those files are re-parsed and the dependency graph is rebuilt. No need to manually call `reindex` after edits, branch switches, or pulls.
 
+**Persistent disk cache:** The index is saved to a pickle cache file (`.codebase-index-cache.pkl`) after every build. On subsequent server starts, the cache is loaded and validated against the current git HEAD — if the ref matches, startup is instant. If a small number of files changed (≤20), the cached index is loaded and incrementally updated instead of rebuilt from scratch. This eliminates the cold-start penalty when restarting Claude Code sessions, restarting the MCP server, or resuming work after context compaction.
+
 ## Language Support
 
 | Language | Method | Extracts |
@@ -54,6 +56,16 @@ PROJECT_ROOT=/path/to/project python -m mcp_codebase_index.server
 ```
 
 `PROJECT_ROOT` specifies which directory to index. Defaults to the current working directory.
+
+### Persistent Cache
+
+In git repositories, the server automatically caches the index to `.codebase-index-cache.pkl` in the project root. On startup:
+
+1. **Cache hit (exact match):** If the cached git ref matches the current HEAD, the index loads instantly from disk — no parsing, no file walking.
+2. **Cache hit (small changeset):** If ≤20 files changed since the cached ref, the cached index is loaded and incrementally updated on the first query.
+3. **Cache miss:** If the changeset is large or no cache exists, a full rebuild runs and saves a new cache.
+
+Add `.codebase-index-cache.pkl` to your `.gitignore` — it's a local-only build artifact.
 
 ### Configuring with OpenClaw
 
@@ -99,7 +111,7 @@ openclaw mcp list
 
 All 18 tools will be available to your agent.
 
-**Performance note:** The server automatically detects file changes via `git diff` before every query (~1-2ms) and incrementally re-indexes only what changed. However, OpenClaw's default MCP integration via mcporter spawns a fresh server process per tool call, which discards the in-memory index and forces a full rebuild each time (~1-2s for small projects, longer for large ones). This is a mcporter process lifecycle limitation, not a server limitation. For persistent connections, use the [openclaw-mcp-adapter](https://github.com/androidStern-personal/openclaw-mcp-adapter) plugin, which connects once at startup and keeps the server running:
+**Performance note:** The server automatically detects file changes via `git diff` before every query (~1-2ms) and incrementally re-indexes only what changed. However, OpenClaw's default MCP integration via mcporter spawns a fresh server process per tool call, which discards the in-memory index and forces a full rebuild each time (~1-2s for small projects, longer for large ones). With persistent caching, these cold starts are now significantly faster — the server loads from the disk cache instead of re-parsing the entire codebase. For persistent connections (avoiding even the cache load overhead), use the [openclaw-mcp-adapter](https://github.com/androidStern-personal/openclaw-mcp-adapter) plugin, which connects once at startup and keeps the server running:
 
 ```bash
 pip install openclaw-mcp-adapter
@@ -137,6 +149,39 @@ Or using the Python module directly (useful if installed in a virtualenv):
   }
 }
 ```
+
+#### Reinforcing Tool Usage with Hooks
+
+Claude Code tends to default to built-in Glob/Grep/Read tools even when codebase-index is available. In addition to CLAUDE.md instructions (see below), you can add hooks that fire on every prompt to reinforce the behavior. Add this to `.claude/settings.local.json`:
+
+```json
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo 'CRITICAL REMINDER: Use codebase-index MCP tools FIRST for ALL code navigation (find_symbol, get_function_source, search_codebase, get_dependencies, etc). Only fall back to Glob/Grep/Read for non-code files.'"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo 'Use codebase-index MCP tools first for code navigation.'"
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+Hook stdout is injected as context Claude sees before responding. `SessionStart` fires on startup, resume, and context compaction. `UserPromptSubmit` fires on every turn.
 
 ### Important: Make the AI Actually Use Indexed Tools
 
@@ -192,6 +237,8 @@ Tested across four real-world projects on an M-series MacBook Pro, from a small 
 | FastAPI | 2,556 | 332,160 | 4,139 | 617 | 5.7s | 55 MB |
 | Django | 3,714 | 707,493 | 29,995 | 7,371 | 36.2s | 126 MB |
 | **CPython** | **2,464** | **1,115,334** | **59,620** | **9,037** | **55.9s** | **197 MB** |
+
+With persistent caching, subsequent startups bypass the full build entirely. Cache load time is negligible compared to parsing — a cache hit on CPython restores the full index in under a second instead of 56s.
 
 ### Query Response Size vs Total Source
 

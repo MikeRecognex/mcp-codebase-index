@@ -52,6 +52,9 @@ htmlcov/
 # ── Claude Code local state ───────────────────
 .claude/
 
+# ── Codebase index cache ─────────────────────
+.codebase-index-cache.pkl
+
 # ── Misc ───────────────────────────────────────
 *.log
 *.bak

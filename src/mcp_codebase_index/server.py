@@ -32,6 +32,7 @@ import fnmatch
 import json
 import os
 import sys
+import pickle
 import time
 import traceback
 
@@ -54,6 +55,10 @@ _project_root: str = ""
 _indexer: ProjectIndexer | None = None
 _query_fns: dict | None = None
 _is_git: bool = False
+
+# Persistent cache
+_CACHE_FILENAME = ".codebase-index-cache.pkl"
+_CACHE_VERSION = 1  # Bump when ProjectIndex schema changes
 
 # Session usage stats
 _session_start: float = time.time()
@@ -156,16 +161,96 @@ def _format_duration(seconds: float) -> str:
     return f"{hours}h {mins}m"
 
 
+def _cache_path(project_root: str) -> str:
+    """Return the path to the pickle cache file for this project."""
+    return os.path.join(project_root, _CACHE_FILENAME)
+
+
+def _save_cache(index: "ProjectIndex") -> None:
+    """Persist the project index to a pickle cache file."""
+    try:
+        root = index.root_path
+        path = _cache_path(root)
+        payload = {"version": _CACHE_VERSION, "index": index}
+        with open(path, "wb") as f:
+            pickle.dump(payload, f, protocol=pickle.HIGHEST_PROTOCOL)
+        print(f"[mcp-codebase-index] Cache saved → {path}", file=sys.stderr)
+    except Exception as exc:
+        print(f"[mcp-codebase-index] Cache save failed: {exc}", file=sys.stderr)
+
+
+def _load_cache(project_root: str) -> "ProjectIndex | None":
+    """Load a cached project index if it exists and is compatible."""
+    path = _cache_path(project_root)
+    if not os.path.exists(path):
+        return None
+    try:
+        with open(path, "rb") as f:
+            payload = pickle.load(f)
+        if not isinstance(payload, dict) or payload.get("version") != _CACHE_VERSION:
+            print("[mcp-codebase-index] Cache version mismatch, ignoring", file=sys.stderr)
+            return None
+        index = payload["index"]
+        from mcp_codebase_index.models import ProjectIndex as PI
+        if not isinstance(index, PI):
+            return None
+        return index
+    except Exception as exc:
+        print(f"[mcp-codebase-index] Cache load failed: {exc}", file=sys.stderr)
+        return None
+
+
 def _ensure_index() -> None:
     """Build the project index on first use (lazy initialization).
+
+    Tries to load from a pickle cache first. If the cache is valid and
+    the git ref matches (or the changeset is small enough for incremental
+    update), skips a full rebuild.
 
     This is called on the first tool call rather than at startup so that
     the MCP server can complete its initialization handshake immediately.
     Without this, large projects would cause Claude Code to timeout waiting
     for the server to become ready.
     """
+    global _project_root, _indexer, _query_fns, _is_git
+
     if _indexer is not None:
         return
+
+    _project_root = os.environ.get("PROJECT_ROOT", os.getcwd())
+    _is_git = is_git_repo(_project_root)
+
+    cached_index = _load_cache(_project_root)
+    if cached_index is not None and _is_git and cached_index.last_indexed_git_ref:
+        current_head = get_head_commit(_project_root)
+        if current_head == cached_index.last_indexed_git_ref:
+            # Exact match — use cache directly
+            print("[mcp-codebase-index] Cache hit (git ref matches)", file=sys.stderr)
+            _indexer = ProjectIndexer(_project_root)
+            _indexer._project_index = cached_index
+            _query_fns = create_project_query_functions(cached_index)
+            return
+
+        # Check if changeset is small enough for incremental update on cache
+        changeset = get_changed_files(_project_root, cached_index.last_indexed_git_ref)
+        total_changes = len(changeset.modified) + len(changeset.added) + len(changeset.deleted)
+        if not changeset.is_empty and total_changes <= 20:
+            print(
+                f"[mcp-codebase-index] Cache hit with {total_changes} changed files, "
+                f"applying incremental update",
+                file=sys.stderr,
+            )
+            _indexer = ProjectIndexer(_project_root)
+            _indexer._project_index = cached_index
+            _query_fns = create_project_query_functions(cached_index)
+            # _maybe_incremental_update will handle the rest on first tool call
+            return
+
+        print(
+            f"[mcp-codebase-index] Cache stale ({total_changes} changes), full rebuild",
+            file=sys.stderr,
+        )
+
     _build_index()
 
 
@@ -173,16 +258,19 @@ def _build_index() -> None:
     """Build (or rebuild) the project index and query functions."""
     global _project_root, _indexer, _query_fns, _is_git
 
-    _project_root = os.environ.get("PROJECT_ROOT", os.getcwd())
+    if not _project_root:
+        _project_root = os.environ.get("PROJECT_ROOT", os.getcwd())
     print(f"[mcp-codebase-index] Indexing project: {_project_root}", file=sys.stderr)
 
     _indexer = ProjectIndexer(_project_root)
     index = _indexer.index()
     _query_fns = create_project_query_functions(index)
 
-    _is_git = is_git_repo(_project_root)
+    if not _is_git:
+        _is_git = is_git_repo(_project_root)
     if _is_git:
         index.last_indexed_git_ref = get_head_commit(_project_root)
+        _save_cache(index)
 
     print(
         f"[mcp-codebase-index] Indexed {index.total_files} files, "
@@ -255,6 +343,8 @@ def _maybe_incremental_update() -> None:
         f"{n_mod} modified, {n_add} added, {n_del} deleted",
         file=sys.stderr,
     )
+
+    _save_cache(idx)
 
 
 # ---------------------------------------------------------------------------
