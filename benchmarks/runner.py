@@ -176,30 +176,31 @@ def run_claude_task(
             "exit_code": result.returncode,
         }
 
-        # Try to parse JSON output for estimation mode
+        # Parse JSON output — claude --print --output-format json includes
+        # real token counts in the `usage` field
         if result.stdout:
             try:
                 cli_output = json.loads(result.stdout)
                 output["cli_output"] = cli_output
 
-                # In estimation mode, estimate tokens from character counts
-                if auth_mode == "estimation":
-                    output_text = ""
-                    if isinstance(cli_output, dict):
-                        output_text = cli_output.get("result", "")
-                    elif isinstance(cli_output, str):
-                        output_text = cli_output
-
-                    # Estimate: ~4 chars per token
-                    input_chars = len(prompt)
-                    output_chars = len(output_text) if isinstance(output_text, str) else 0
-                    output["estimated_input_tokens"] = max(input_chars // 4, 1)
-                    output["estimated_output_tokens"] = max(output_chars // 4, 1)
+                if isinstance(cli_output, dict):
+                    # Extract token usage from CLI JSON output
+                    usage = cli_output.get("usage", {})
+                    if usage:
+                        output["input_tokens"] = usage.get("input_tokens", 0)
+                        output["output_tokens"] = usage.get("output_tokens", 0)
+                        output["cache_read_input_tokens"] = usage.get(
+                            "cache_read_input_tokens", 0
+                        )
+                        output["cache_creation_input_tokens"] = usage.get(
+                            "cache_creation_input_tokens", 0
+                        )
+                        output["total_cost_usd"] = usage.get("total_cost_usd", 0)
+                    # Also capture session_id for debugging
+                    if cli_output.get("session_id"):
+                        output["session_id"] = cli_output["session_id"]
             except json.JSONDecodeError:
                 output["raw_stdout_len"] = len(result.stdout)
-                if auth_mode == "estimation":
-                    output["estimated_input_tokens"] = max(len(prompt) // 4, 1)
-                    output["estimated_output_tokens"] = max(len(result.stdout) // 4, 1)
 
         if result.stderr:
             output["stderr_snippet"] = result.stderr[:500]
@@ -269,12 +270,16 @@ def run_benchmark(
                 }
 
                 all_results.append(record)
-                print(f"  Wall time: {result['wall_time_s']}s | Exit: {result['exit_code']}")
 
-                if auth_mode == "estimation":
-                    inp = result.get("estimated_input_tokens", "?")
-                    out = result.get("estimated_output_tokens", "?")
-                    print(f"  Estimated tokens: {inp} in / {out} out")
+                inp = result.get("input_tokens", "?")
+                out = result.get("output_tokens", "?")
+                cost = result.get("total_cost_usd")
+                cost_str = f" | ${cost:.4f}" if cost else ""
+                print(
+                    f"  Wall time: {result['wall_time_s']}s | "
+                    f"Exit: {result['exit_code']} | "
+                    f"Tokens: {inp} in / {out} out{cost_str}"
+                )
 
     return all_results
 

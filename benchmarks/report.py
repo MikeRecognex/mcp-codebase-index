@@ -65,15 +65,15 @@ def merge_token_data(
     for rec in runner_records:
         run_id = rec.get("run_id", "")
         if run_id in proxy_by_run:
+            # Proxy mode: use exact per-API-call token counts
             rec["proxy_data"] = proxy_by_run[run_id]
             rec["total_tokens"] = (
                 proxy_by_run[run_id]["input_tokens"]
                 + proxy_by_run[run_id]["output_tokens"]
             )
-        elif "estimated_input_tokens" in rec:
-            rec["total_tokens"] = (
-                rec["estimated_input_tokens"] + rec["estimated_output_tokens"]
-            )
+        elif "input_tokens" in rec:
+            # CLI JSON output: real token counts from usage field
+            rec["total_tokens"] = rec["input_tokens"] + rec["output_tokens"]
 
     return runner_records
 
@@ -99,14 +99,15 @@ def compute_task_stats(records: list[dict]) -> dict:
             ]
             input_tokens = [
                 r.get("proxy_data", {}).get("input_tokens", 0)
-                or r.get("estimated_input_tokens", 0)
+                or r.get("input_tokens", 0)
                 for r in runs
             ]
             output_tokens = [
                 r.get("proxy_data", {}).get("output_tokens", 0)
-                or r.get("estimated_output_tokens", 0)
+                or r.get("output_tokens", 0)
                 for r in runs
             ]
+            costs = [r.get("total_cost_usd", 0) for r in runs if r.get("total_cost_usd")]
 
             stats[task_id][mode] = {
                 "runs": len(runs),
@@ -115,6 +116,7 @@ def compute_task_stats(records: list[dict]) -> dict:
                 "median_input_tokens": _median(input_tokens),
                 "median_output_tokens": _median(output_tokens),
                 "median_api_calls": _median(api_calls),
+                "median_cost_usd": _median(costs),
                 "all_tokens": tokens,
                 "all_times": times,
             }
@@ -178,13 +180,12 @@ def generate_report(
     if not runner_records:
         return "# No results found\n\nNo benchmark data available."
 
-    # Determine measurement type
     auth_mode = runner_records[0].get("auth_mode", "estimation")
     model = runner_records[0].get("model", "unknown")
     measurement_note = (
-        "Exact token counts via API proxy"
+        "Exact token counts via API proxy + CLI"
         if auth_mode == "proxy"
-        else "Estimated tokens (~4 chars/token)"
+        else "Token counts from Claude Code CLI JSON output"
     )
 
     # Merge and compute
@@ -290,6 +291,8 @@ def generate_report(
             lines.append(f"- Median wall time: {_fmt_time(s['median_time_s'])}")
             if s['median_api_calls']:
                 lines.append(f"- Median API calls: {int(s['median_api_calls'])}")
+            if s['median_cost_usd']:
+                lines.append(f"- Median cost: ${s['median_cost_usd']:.4f}")
             lines.append(f"- Runs: {s['runs']}")
             lines.append("")
 
