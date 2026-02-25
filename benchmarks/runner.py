@@ -17,6 +17,7 @@ Two measurement modes (auto-detected):
 import argparse
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -216,6 +217,10 @@ def run_claude_task(
                     output["duration_api_ms"] = cli_output.get("duration_api_ms", 0)
                     if cli_output.get("session_id"):
                         output["session_id"] = cli_output["session_id"]
+
+                    # Extract response text for quality scoring
+                    if cli_output.get("result"):
+                        output["response_text"] = cli_output["result"]
             except json.JSONDecodeError:
                 output["raw_stdout_len"] = len(result.stdout)
 
@@ -230,6 +235,109 @@ def run_claude_task(
             os.unlink(config_path)
         except OSError:
             pass
+
+
+def judge_responses(
+    task: dict,
+    with_response: str,
+    without_response: str,
+    with_grounding: int = 0,
+    without_grounding: int = 0,
+    model: str = DEFAULT_MODEL,
+) -> dict | None:
+    """Use an LLM to judge the quality of both responses for a task.
+
+    Returns dict with 'with_index' and 'without_index' scores,
+    each containing accuracy, depth, grounding, completeness (1-10).
+    """
+    if not with_response or not without_response:
+        return None
+
+    prompt = f"""You are an expert code reviewer judging the quality of two AI-generated answers about a codebase.
+
+TASK: {task['description']}
+QUESTION: {task['prompt']}
+
+AUTOMATED METRICS (already measured — do NOT re-judge these):
+- Answer A references {with_grounding} unique code artifacts (files, symbols, line numbers)
+- Answer B references {without_grounding} unique code artifacts (files, symbols, line numbers)
+
+=== ANSWER A (with_index) ===
+{with_response[:8000]}
+
+=== ANSWER B (without_index) ===
+{without_response[:8000]}
+
+Rate each answer 1-10 on these criteria (judge ONLY from the text — you cannot verify code existence):
+- **Specificity**: Does the answer reference specific files, classes, methods, and line numbers rather than speaking in generalities? Count concrete code references, not whether they're "correct".
+- **Depth**: How thorough is the analysis? Does it trace through actual code paths vs give a surface-level overview?
+- **Completeness**: Does it fully answer all parts of the question?
+- **Usefulness**: Would a developer find this answer actionable? Could they navigate to the exact code based on this answer?
+
+IMPORTANT scoring guidelines:
+- An answer that names specific files like `django/db/models/query.py:742` and traces code paths scores HIGH on specificity (7-10)
+- An answer that says "Django's ORM handles this" without naming files scores LOW on specificity (1-3)
+- An answer with 2 API turns that gives a general overview scores LOW on depth
+- An answer with 10+ turns that explored the actual codebase scores HIGH on depth
+
+Respond with ONLY a JSON object in this exact format, no other text:
+{{"with_index": {{"specificity": N, "depth": N, "completeness": N, "usefulness": N}}, "without_index": {{"specificity": N, "depth": N, "completeness": N, "usefulness": N}}}}"""
+
+    # Write prompt to a temp file and pipe via stdin to avoid hanging
+    prompt_file = tempfile.NamedTemporaryFile(
+        mode="w", suffix=".txt", prefix="judge_prompt_", delete=False
+    )
+    prompt_file.write(prompt)
+    prompt_file.close()
+
+    env = os.environ.copy()
+    env.pop("CLAUDECODE", None)
+
+    try:
+        with open(prompt_file.name) as pf:
+            result = subprocess.run(
+                [
+                    "claude",
+                    "--print",
+                    "--model", model,
+                    "--strict-mcp-config",
+                    "--mcp-config", os.path.join(BENCHMARKS_DIR, "configs", "without_index.json"),
+                ],
+                capture_output=True,
+                text=True,
+                env=env,
+                stdin=pf,
+                timeout=120,
+            )
+        if result.returncode != 0:
+            print(f"  Judge failed (exit {result.returncode})")
+            if result.stderr:
+                print(f"  Judge stderr: {result.stderr[:300]}")
+            return None
+
+        # Extract JSON from response text (may have markdown fences or prose around it)
+        text = result.stdout.strip()
+        json_match = re.search(r'\{[^{}]*"with_index"[^{}]*\{[^}]+\}[^{}]*"without_index"[^{}]*\{[^}]+\}[^{}]*\}', text)
+        if json_match:
+            scores = json.loads(json_match.group())
+            return scores
+        else:
+            print(f"  Judge: could not find JSON in response ({len(text)} chars)")
+            print(f"  Judge response preview: {text[:300]}")
+    except subprocess.TimeoutExpired:
+        print("  Judge error: timed out after 120s")
+    except json.JSONDecodeError as e:
+        print(f"  Judge error: JSON parse failed: {e}")
+        if json_match:
+            print(f"  Judge matched text: {json_match.group()[:200]}")
+    except Exception as e:
+        print(f"  Judge error ({type(e).__name__}): {e}")
+    finally:
+        try:
+            os.unlink(prompt_file.name)
+        except OSError:
+            pass
+    return None
 
 
 def load_tasks(task_filter: str | None = None) -> list[dict]:
@@ -251,14 +359,21 @@ def run_benchmark(
     auth_mode: str,
     model: str,
 ) -> list[dict]:
-    """Run the full benchmark matrix: tasks x modes x repeats."""
+    """Run the full benchmark matrix: tasks x repeats, both modes per iteration.
+
+    Groups modes together so we can compare responses and run quality scoring.
+    """
+    from benchmarks.report import score_grounding
+
     all_results = []
     total_runs = len(tasks) * len(MODES) * repeats
     run_num = 0
 
     for task in tasks:
-        for mode in MODES:
-            for repeat in range(repeats):
+        for repeat in range(repeats):
+            pair_results = {}
+
+            for mode in MODES:
                 run_num += 1
                 run_id = f"{mode}__{task['id']}__r{repeat}"
                 write_run_id(run_id)
@@ -275,6 +390,15 @@ def run_benchmark(
                     model=model,
                 )
 
+                # Score grounding from response text
+                response_text = result.get("response_text", "")
+                grounding = score_grounding(
+                    response_text,
+                    num_turns=result.get("num_turns", 1),
+                )
+                result["grounding_score"] = grounding["composite"]
+                result["grounding_detail"] = grounding
+
                 record = {
                     "run_id": run_id,
                     "task_id": task["id"],
@@ -286,6 +410,7 @@ def run_benchmark(
                     **result,
                 }
 
+                pair_results[mode] = record
                 all_results.append(record)
 
                 inp = result.get("input_tokens", "?")
@@ -297,21 +422,69 @@ def run_benchmark(
                     f"  Wall time: {result['wall_time_s']}s | "
                     f"Exit: {result['exit_code']} | "
                     f"Tokens: {inp} in / {out} out | "
-                    f"Turns: {turns}{cost_str}"
+                    f"Turns: {turns}{cost_str} | "
+                    f"Grounding: {grounding['composite']}"
                 )
+
+            # Run LLM judge on the pair
+            w_rec = pair_results.get("with_index")
+            wo_rec = pair_results.get("without_index")
+            if w_rec and wo_rec:
+                w_text = w_rec.get("response_text", "")
+                wo_text = wo_rec.get("response_text", "")
+                print(f"\n  Judge check: with_text={len(w_text)} chars, without_text={len(wo_text)} chars")
+                if w_text and wo_text:
+                    print(f"\n  Judging responses for {task['id']} r{repeat}...")
+                    scores = judge_responses(
+                        task, w_text, wo_text,
+                        with_grounding=w_rec.get("grounding_score", 0),
+                        without_grounding=wo_rec.get("grounding_score", 0),
+                        model=model,
+                    )
+                    if scores:
+                        for mode_key in ("with_index", "without_index"):
+                            mode_scores = scores.get(mode_key, {})
+                            rec = pair_results[mode_key]
+                            rec["judge_specificity"] = mode_scores.get("specificity")
+                            rec["judge_depth"] = mode_scores.get("depth")
+                            rec["judge_completeness"] = mode_scores.get("completeness")
+                            rec["judge_usefulness"] = mode_scores.get("usefulness")
+                            dims = [v for v in mode_scores.values() if isinstance(v, (int, float))]
+                            rec["judge_avg"] = round(sum(dims) / len(dims), 1) if dims else None
+                        print(
+                            f"  Scores — with: {scores.get('with_index', {})} | "
+                            f"without: {scores.get('without_index', {})}"
+                        )
+                    else:
+                        print("  Judge returned no scores")
 
     return all_results
 
 
 def save_results(results: list[dict], output_path: str):
-    """Save results to a JSONL file."""
+    """Save results to a JSONL file, writing response text to separate files."""
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    responses_dir = os.path.join(os.path.dirname(output_path), "responses")
+    os.makedirs(responses_dir, exist_ok=True)
+
     with open(output_path, "w") as f:
         for record in results:
-            # Remove large cli_output from saved results to keep file manageable
-            save_record = {k: v for k, v in record.items() if k != "cli_output"}
+            # Write response text to a separate file
+            response_text = record.get("response_text", "")
+            if response_text:
+                response_file = os.path.join(responses_dir, f"{record['run_id']}.txt")
+                with open(response_file, "w") as rf:
+                    rf.write(response_text)
+                record["response_file"] = response_file
+
+            # Remove large fields from saved JSONL
+            save_record = {
+                k: v for k, v in record.items()
+                if k not in ("cli_output", "response_text")
+            }
             f.write(json.dumps(save_record) + "\n")
     print(f"\nResults saved to {output_path}")
+    print(f"Response files saved to {responses_dir}")
 
 
 def main():

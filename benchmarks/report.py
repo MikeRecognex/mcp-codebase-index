@@ -10,8 +10,89 @@ Can also be imported and called programmatically by runner.py.
 import argparse
 import json
 import os
+import re
 import time
 from collections import defaultdict
+
+
+def score_grounding(response_text: str, num_turns: int = 1) -> dict:
+    """Score grounding with structured sub-metrics.
+
+    Returns a dict with file_refs, symbol_refs, line_refs, code_snippets,
+    test_file_refs, refs_per_turn, and a weighted composite score.
+
+    Line refs and test file refs are strong exploration signals — hard to
+    hallucinate from training data alone.
+    """
+    empty = {
+        "file_refs": 0, "symbol_refs": 0, "line_refs": 0,
+        "code_snippets": 0, "test_file_refs": 0,
+        "refs_per_turn": 0.0, "composite": 0.0,
+    }
+    if not response_text:
+        return empty
+
+    # File paths: word/word/word.ext patterns (at least 2 segments)
+    file_refs = set(re.findall(
+        r'\b(?:[a-zA-Z_][\w-]*/)+[a-zA-Z_][\w-]*\.(?:py|js|ts|go|rs|java|c|h|cpp|rb)\b',
+        response_text
+    ))
+
+    # Code symbols: ClassName.method_name or module.function patterns
+    symbol_refs = set(re.findall(
+        r'\b[A-Z][a-zA-Z0-9_]*\.[a-z_][a-zA-Z0-9_]*(?:\(\))?',
+        response_text
+    ))
+
+    # Line number references: "line 42", ".py:42", "L42"
+    line_refs = set(re.findall(
+        r'(?:line\s+\d+|\.py:\d+|\.js:\d+|\.ts:\d+|\bL\d+\b)',
+        response_text
+    ))
+
+    # Test file references: tests/foo.py, test_foo.py
+    test_file_refs = set(re.findall(
+        r'\btests?/\w+\.py\b',
+        response_text
+    )) | set(re.findall(
+        r'\btest_\w+\.py\b',
+        response_text
+    ))
+
+    # Fenced code blocks
+    code_snippets = len(re.findall(r'```', response_text)) // 2
+
+    n_file = len(file_refs)
+    n_symbol = len(symbol_refs)
+    n_line = len(line_refs)
+    n_test = len(test_file_refs)
+    n_snippets = code_snippets
+
+    turns = max(num_turns, 1)
+    refs_per_turn = (n_file + n_symbol) / turns
+
+    # Weighted composite — line refs and test files are strong signals
+    composite = (
+        n_line * 5
+        + n_test * 3
+        + n_snippets * 2
+        + n_file
+        + n_symbol * 0.5
+    )
+
+    # Density penalty: suspiciously many refs per turn suggests training data
+    if refs_per_turn > 6:
+        composite *= max(0.3, 1.0 - (refs_per_turn - 6) * 0.05)
+
+    return {
+        "file_refs": n_file,
+        "symbol_refs": n_symbol,
+        "line_refs": n_line,
+        "code_snippets": n_snippets,
+        "test_file_refs": n_test,
+        "refs_per_turn": round(refs_per_turn, 1),
+        "composite": round(composite, 1),
+    }
 
 
 def load_jsonl(path: str) -> list[dict]:
@@ -93,6 +174,34 @@ def compute_task_stats(records: list[dict]) -> dict:
                 r.get("input_tokens_uncached", 0) for r in runs
             ]
 
+            # Quality metrics (use 'is not None' to preserve valid zeroes)
+            grounding_scores = [
+                r["grounding_score"] for r in runs
+                if r.get("grounding_score") is not None
+            ]
+            judge_avgs = [
+                r["judge_avg"] for r in runs
+                if r.get("judge_avg") is not None
+            ]
+
+            # Structured grounding sub-metrics
+            line_refs = [
+                r["grounding_detail"]["line_refs"] for r in runs
+                if r.get("grounding_detail")
+            ]
+            refs_per_turn = [
+                r["grounding_detail"]["refs_per_turn"] for r in runs
+                if r.get("grounding_detail")
+            ]
+            test_file_refs = [
+                r["grounding_detail"]["test_file_refs"] for r in runs
+                if r.get("grounding_detail")
+            ]
+            code_snippets = [
+                r["grounding_detail"]["code_snippets"] for r in runs
+                if r.get("grounding_detail")
+            ]
+
             stats[task_id][mode] = {
                 "runs": len(runs),
                 "median_cost_usd": _median(costs),
@@ -102,6 +211,12 @@ def compute_task_stats(records: list[dict]) -> dict:
                 "median_cache_read": _median(cache_reads),
                 "median_cache_create": _median(cache_creates),
                 "median_uncached": _median(uncached),
+                "median_grounding": _median(grounding_scores),
+                "median_line_refs": _median(line_refs),
+                "median_refs_per_turn": _median(refs_per_turn),
+                "median_test_file_refs": _median(test_file_refs),
+                "median_code_snippets": _median(code_snippets),
+                "median_judge_avg": _median(judge_avgs),
             }
 
     return stats
@@ -157,6 +272,34 @@ def _pct_savings(with_val: float, without_val: float) -> str:
     return f"{savings:.0f}%"
 
 
+def load_response_text(record: dict) -> str | None:
+    """Load response text from the response_file path in a record."""
+    path = record.get("response_file", "")
+    if not path or not os.path.exists(path):
+        return None
+    try:
+        with open(path) as f:
+            return f.read()
+    except OSError:
+        return None
+
+
+def extract_excerpt(text: str, pattern: str, chars: int = 200) -> str | None:
+    """Find first paragraph containing pattern, return surrounding context."""
+    match = re.search(pattern, text)
+    if not match:
+        return None
+    # Find paragraph boundaries around the match
+    start = text.rfind("\n\n", 0, match.start())
+    start = start + 2 if start != -1 else max(0, match.start() - chars // 2)
+    end = text.find("\n\n", match.end())
+    end = end if end != -1 else min(len(text), match.end() + chars // 2)
+    excerpt = text[start:end].strip()
+    if len(excerpt) > chars:
+        excerpt = excerpt[:chars] + "..."
+    return excerpt
+
+
 def generate_report(
     runner_results_path: str,
     proxy_results_path: str | None = None,
@@ -190,19 +333,21 @@ def generate_report(
     lines.append(f"**Repeats:** {repeats} per task/mode")
     lines.append("")
 
-    # Primary results table — cost and turns
+    # Primary results table — cost, turns, and quality
     lines.append("## Results")
     lines.append("")
     lines.append(
         "| Task | Category "
-        "| New Context (with) | New Context (without) | Context Savings "
         "| Cost (with) | Cost (without) | Cost Savings "
+        "| Quality (with) | Quality (without) "
+        "| Grounding (with) | Grounding (without) "
         "| Turns | Time Savings |"
     )
     lines.append(
         "|------|----------"
-        "|-------------------|----------------------|----------------"
         "|------------|---------------|-------------"
+        "|----------------|-------------------"
+        "|------------------|---------------------"
         "|-------|-------------|"
     )
 
@@ -212,6 +357,10 @@ def generate_report(
     all_without_times = []
     all_with_ctx = []
     all_without_ctx = []
+    all_with_quality = []
+    all_without_quality = []
+    all_with_grounding = []
+    all_without_grounding = []
 
     for task_id in stats:
         cat = tasks_meta.get(task_id, {}).get("category", "")
@@ -226,6 +375,10 @@ def generate_report(
         wo_time = wo.get("median_time_s", 0)
         w_ctx = w.get("median_cache_create", 0)
         wo_ctx = wo.get("median_cache_create", 0)
+        w_quality = w.get("median_judge_avg", 0)
+        wo_quality = wo.get("median_judge_avg", 0)
+        w_grounding = w.get("median_grounding", 0)
+        wo_grounding = wo.get("median_grounding", 0)
 
         if w_cost:
             all_with_costs.append(w_cost)
@@ -239,13 +392,26 @@ def generate_report(
             all_with_ctx.append(w_ctx)
         if wo_ctx:
             all_without_ctx.append(wo_ctx)
+        if w_quality:
+            all_with_quality.append(w_quality)
+        if wo_quality:
+            all_without_quality.append(wo_quality)
+        if w_grounding:
+            all_with_grounding.append(w_grounding)
+        if wo_grounding:
+            all_without_grounding.append(wo_grounding)
+
+        w_q_str = f"{w_quality:.1f}/10" if w_quality else "—"
+        wo_q_str = f"{wo_quality:.1f}/10" if wo_quality else "—"
+        w_g_str = f"{w_grounding:.0f}" if w_grounding else "—"
+        wo_g_str = f"{wo_grounding:.0f}" if wo_grounding else "—"
 
         lines.append(
             f"| {task_id} | {cat} "
-            f"| {_fmt_tokens(w_ctx)} | {_fmt_tokens(wo_ctx)} "
-            f"| {_pct_savings(w_ctx, wo_ctx)} "
             f"| {_fmt_cost(w_cost)} | {_fmt_cost(wo_cost)} "
             f"| {_pct_savings(w_cost, wo_cost)} "
+            f"| {w_q_str} | {wo_q_str} "
+            f"| {w_g_str} | {wo_g_str} "
             f"| {int(w_turns) if w_turns else '—'}→{int(wo_turns) if wo_turns else '—'} "
             f"| {_pct_savings(w_time, wo_time)} |"
         )
@@ -269,6 +435,14 @@ def generate_report(
         med_w_t = _median(all_with_times)
         med_wo_t = _median(all_without_times)
         lines.append(f"- **Median wall-time savings:** {_pct_savings(med_w_t, med_wo_t)}")
+    if all_with_quality and all_without_quality:
+        med_w_q = _median(all_with_quality)
+        med_wo_q = _median(all_without_quality)
+        lines.append(f"- **Median quality (with):** {med_w_q:.1f}/10 vs **(without):** {med_wo_q:.1f}/10")
+    if all_with_grounding and all_without_grounding:
+        med_w_g = _median(all_with_grounding)
+        med_wo_g = _median(all_without_grounding)
+        lines.append(f"- **Median grounding composite (with):** {med_w_g:.0f} vs **(without):** {med_wo_g:.0f}")
 
     # Detailed breakdown with cache info
     lines.append("")
@@ -299,8 +473,102 @@ def generate_report(
             lines.append(
                 f"  - Prompt cache create: {_fmt_tokens(s['median_cache_create'])}"
             )
+            if s.get("median_judge_avg"):
+                lines.append(f"- Quality score: {s['median_judge_avg']:.1f}/10")
+            if s.get("median_grounding"):
+                lines.append(f"- Grounding composite: {s['median_grounding']:.0f}")
+                lines.append(f"  - Line refs: {int(s.get('median_line_refs', 0))}")
+                lines.append(f"  - Test file refs: {int(s.get('median_test_file_refs', 0))}")
+                lines.append(f"  - Code snippets: {int(s.get('median_code_snippets', 0))}")
+                lines.append(f"  - Refs/turn: {s.get('median_refs_per_turn', 0):.1f}")
             lines.append(f"- Runs: {s['runs']}")
             lines.append("")
+
+    # Response comparison section
+    # Group records by task_id and mode, pick first repeat with response_file
+    grouped_recs: dict[str, dict[str, dict]] = defaultdict(dict)
+    for rec in records:
+        mode = rec.get("mode", "")
+        tid = rec.get("task_id", "")
+        if mode and tid and mode not in grouped_recs[tid]:
+            grouped_recs[tid][mode] = rec
+
+    has_comparisons = False
+    comparison_lines = []
+    comparison_lines.append("## Response Comparison")
+    comparison_lines.append("")
+
+    for task_id in stats:
+        w_rec = grouped_recs.get(task_id, {}).get("with_index")
+        wo_rec = grouped_recs.get(task_id, {}).get("without_index")
+        if not w_rec or not wo_rec:
+            continue
+
+        w_text = load_response_text(w_rec)
+        wo_text = load_response_text(wo_rec)
+        if not w_text or not wo_text:
+            continue
+
+        w_detail = w_rec.get("grounding_detail", {})
+        wo_detail = wo_rec.get("grounding_detail", {})
+        if not w_detail or not wo_detail:
+            # Recompute if missing (old results)
+            w_detail = score_grounding(w_text, w_rec.get("num_turns", 1))
+            wo_detail = score_grounding(wo_text, wo_rec.get("num_turns", 1))
+
+        has_comparisons = True
+        comparison_lines.append(f"### {task_id} — Response Comparison")
+        comparison_lines.append("")
+        comparison_lines.append(
+            "| Metric | With Index | Without Index |"
+        )
+        comparison_lines.append(
+            "|--------|-----------|---------------|"
+        )
+        comparison_lines.append(
+            f"| Exact line refs | {w_detail.get('line_refs', 0)} "
+            f"| {wo_detail.get('line_refs', 0)} |"
+        )
+        comparison_lines.append(
+            f"| Refs per turn | {w_detail.get('refs_per_turn', 0)} "
+            f"| {wo_detail.get('refs_per_turn', 0)} |"
+        )
+        comparison_lines.append(
+            f"| Code snippets | {w_detail.get('code_snippets', 0)} "
+            f"| {wo_detail.get('code_snippets', 0)} |"
+        )
+        comparison_lines.append(
+            f"| Test file refs | {w_detail.get('test_file_refs', 0)} "
+            f"| {wo_detail.get('test_file_refs', 0)} |"
+        )
+        comparison_lines.append("")
+
+        # Grounded excerpt: paragraph with line numbers
+        grounded = extract_excerpt(w_text, r'\.py:\d+|line\s+\d+')
+        if grounded:
+            comparison_lines.append("**With Index** (grounded):")
+            comparison_lines.append(f"> {grounded}")
+            comparison_lines.append("")
+
+        # Ungrounded excerpt: paragraph without file paths or line numbers
+        # Find paragraphs in without_index that lack specific refs
+        paragraphs = re.split(r'\n\n+', wo_text)
+        ungrounded = None
+        for para in paragraphs:
+            para = para.strip()
+            if len(para) < 40:
+                continue
+            if not re.search(r'\.py:\d+|line\s+\d+|/\w+\.py', para):
+                ungrounded = para[:200] + ("..." if len(para) > 200 else "")
+                break
+        if ungrounded:
+            comparison_lines.append("**Without Index** (from training data):")
+            comparison_lines.append(f"> {ungrounded}")
+            comparison_lines.append("")
+
+    if has_comparisons:
+        lines.append("")
+        lines.extend(comparison_lines)
 
     report = "\n".join(lines)
 
