@@ -27,6 +27,7 @@ dependencies = []
 [project.optional-dependencies]
 mcp = ["mcp>=1.0"]
 dev = ["pytest>=8.0", "ruff>=0.5"]
+benchmark = ["aiohttp>=3.9"]
 
 [project.scripts]
 mcp-codebase-index = "mcp_codebase_index.server:main_sync"

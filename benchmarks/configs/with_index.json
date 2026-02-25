@@ -1,0 +1,15 @@
+{
+  "mcpServers": {
+    "codebase-index": {
+      "command": "uv",
+      "args": [
+        "run",
+        "--directory", "__PROJECT_ROOT__",
+        "mcp-codebase-index"
+      ],
+      "env": {
+        "PROJECT_ROOT": "__TARGET_REPO__"
+      }
+    }
+  }
+}

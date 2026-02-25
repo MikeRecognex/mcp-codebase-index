@@ -58,6 +58,9 @@ htmlcov/
 # ── MCP local config ─────────────────────────
 .mcp.json
 
+# ── Benchmark results ────────────────────────────
+benchmarks/results/
+
 # ── Misc ───────────────────────────────────────
 *.log
 *.bak
