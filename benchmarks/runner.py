@@ -161,14 +161,23 @@ def run_claude_task(
             env["ANTHROPIC_BASE_URL"] = "http://localhost:8082"
 
         start_time = time.time()
-        result = subprocess.run(
-            cmd,
-            cwd=target_repo,
-            capture_output=True,
-            text=True,
-            env=env,
-            timeout=300,  # 5 minute timeout per task
-        )
+        try:
+            result = subprocess.run(
+                cmd,
+                cwd=target_repo,
+                capture_output=True,
+                text=True,
+                env=env,
+                timeout=600,  # 10 minute timeout per task
+            )
+        except subprocess.TimeoutExpired:
+            wall_time = time.time() - start_time
+            print(f"  TIMEOUT after {wall_time:.0f}s")
+            return {
+                "wall_time_s": round(wall_time, 2),
+                "exit_code": -1,
+                "timed_out": True,
+            }
         wall_time = time.time() - start_time
 
         output = {
