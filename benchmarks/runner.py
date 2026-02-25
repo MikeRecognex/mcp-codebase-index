@@ -25,6 +25,10 @@ import time
 
 BENCHMARKS_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(BENCHMARKS_DIR)
+
+# Ensure project root is on sys.path so `from benchmarks.report` works when run as a script
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
 RESULTS_DIR = os.path.join(BENCHMARKS_DIR, "results")
 TASKS_FILE = os.path.join(BENCHMARKS_DIR, "tasks.json")
 RUN_ID_FILE = os.path.join(RESULTS_DIR, ".current_run_id")
@@ -151,6 +155,8 @@ def run_claude_task(
         ]
 
         env = os.environ.copy()
+        # Unset CLAUDECODE so nested `claude` CLI doesn't refuse to start
+        env.pop("CLAUDECODE", None)
         if auth_mode == "proxy":
             env["ANTHROPIC_BASE_URL"] = "http://localhost:8082"
 
