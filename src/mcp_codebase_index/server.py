@@ -42,6 +42,7 @@ from mcp.types import Tool, TextContent
 import mcp.types as types
 
 from mcp_codebase_index.git_tracker import is_git_repo, get_head_commit, get_changed_files
+from mcp_codebase_index.models import ProjectIndex
 from mcp_codebase_index.project_indexer import ProjectIndexer
 from mcp_codebase_index.query_api import create_project_query_functions
 
