@@ -195,21 +195,23 @@ def generate_report(
     lines.append("")
     lines.append(
         "| Task | Category "
+        "| New Context (with) | New Context (without) | Context Savings "
         "| Cost (with) | Cost (without) | Cost Savings "
-        "| Turns (with) | Turns (without) | Turn Savings "
-        "| Time Savings |"
+        "| Turns | Time Savings |"
     )
     lines.append(
         "|------|----------"
+        "|-------------------|----------------------|----------------"
         "|------------|---------------|-------------"
-        "|-------------|----------------|-------------"
-        "|-------------|"
+        "|-------|-------------|"
     )
 
     all_with_costs = []
     all_without_costs = []
     all_with_times = []
     all_without_times = []
+    all_with_ctx = []
+    all_without_ctx = []
 
     for task_id in stats:
         cat = tasks_meta.get(task_id, {}).get("category", "")
@@ -222,6 +224,8 @@ def generate_report(
         wo_turns = wo.get("median_turns", 0)
         w_time = w.get("median_time_s", 0)
         wo_time = wo.get("median_time_s", 0)
+        w_ctx = w.get("median_cache_create", 0)
+        wo_ctx = wo.get("median_cache_create", 0)
 
         if w_cost:
             all_with_costs.append(w_cost)
@@ -231,14 +235,18 @@ def generate_report(
             all_with_times.append(w_time)
         if wo_time:
             all_without_times.append(wo_time)
+        if w_ctx:
+            all_with_ctx.append(w_ctx)
+        if wo_ctx:
+            all_without_ctx.append(wo_ctx)
 
         lines.append(
             f"| {task_id} | {cat} "
+            f"| {_fmt_tokens(w_ctx)} | {_fmt_tokens(wo_ctx)} "
+            f"| {_pct_savings(w_ctx, wo_ctx)} "
             f"| {_fmt_cost(w_cost)} | {_fmt_cost(wo_cost)} "
             f"| {_pct_savings(w_cost, wo_cost)} "
-            f"| {int(w_turns) if w_turns else '—'} "
-            f"| {int(wo_turns) if wo_turns else '—'} "
-            f"| {_pct_savings(w_turns, wo_turns)} "
+            f"| {int(w_turns) if w_turns else '—'}→{int(wo_turns) if wo_turns else '—'} "
             f"| {_pct_savings(w_time, wo_time)} |"
         )
 
@@ -247,6 +255,12 @@ def generate_report(
     lines.append("## Aggregate")
     lines.append("")
 
+    if all_with_ctx and all_without_ctx:
+        med_w_c = _median(all_with_ctx)
+        med_wo_c = _median(all_without_ctx)
+        lines.append(
+            f"- **Median new-context savings:** {_pct_savings(med_w_c, med_wo_c)}"
+        )
     if all_with_costs and all_without_costs:
         med_w = _median(all_with_costs)
         med_wo = _median(all_without_costs)
