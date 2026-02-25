@@ -488,7 +488,7 @@ TOOLS = [
     ),
     Tool(
         name="find_symbol",
-        description="Find where a symbol (function, method, class) is defined. Returns file path, line number, and type.",
+        description="Find where a symbol (function, method, class) is defined. Returns file path, line range, type, signature, and a source preview (~20 lines).",
         inputSchema={
             "type": "object",
             "properties": {

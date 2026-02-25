@@ -464,43 +464,49 @@ def create_project_query_functions(index: ProjectIndex) -> dict[str, Callable]:
                 source += f"\n... (truncated to {max_lines} lines)"
         return source
 
+    def _func_result(func, path, meta):
+        preview_lines = meta.lines[func.line_range.start - 1 : func.line_range.start + 19]
+        return {
+            "file": path,
+            "line": func.line_range.start,
+            "end_line": func.line_range.end,
+            "type": "method" if func.is_method else "function",
+            "signature": f"def {func.name}({', '.join(func.parameters)})",
+            "source_preview": "\n".join(preview_lines),
+        }
+
+    def _class_result(cls, path, meta):
+        preview_lines = meta.lines[cls.line_range.start - 1 : cls.line_range.start + 19]
+        return {
+            "file": path,
+            "line": cls.line_range.start,
+            "end_line": cls.line_range.end,
+            "type": "class",
+            "methods": [m.name for m in cls.methods],
+            "bases": cls.base_classes,
+            "source_preview": "\n".join(preview_lines),
+        }
+
     def find_symbol(name: str) -> dict:
-        """Find where a symbol is defined: {file, line, type}."""
+        """Find where a symbol is defined: {file, line, type, signature, source_preview}."""
         if name in index.symbol_table:
             path = index.symbol_table[name]
             meta = _resolve_file(index, path)
             if meta is not None:
-                # Find the line number and type
                 for func in meta.functions:
                     if func.name == name or func.qualified_name == name:
-                        return {
-                            "file": path,
-                            "line": func.line_range.start,
-                            "type": "method" if func.is_method else "function",
-                        }
+                        return _func_result(func, path, meta)
                 for cls in meta.classes:
                     if cls.name == name:
-                        return {
-                            "file": path,
-                            "line": cls.line_range.start,
-                            "type": "class",
-                        }
+                        return _class_result(cls, path, meta)
         # Fallback: search all files
         for path, meta in sorted(index.files.items()):
             for func in meta.functions:
                 if func.name == name or func.qualified_name == name:
-                    return {
-                        "file": path,
-                        "line": func.line_range.start,
-                        "type": "method" if func.is_method else "function",
-                    }
+                    return _func_result(func, path, meta)
             for cls in meta.classes:
                 if cls.name == name:
-                    return {
-                        "file": path,
-                        "line": cls.line_range.start,
-                        "type": "class",
-                    }
+                    return _class_result(cls, path, meta)
         return {"error": f"symbol '{name}' not found"}
 
     def get_dependencies(name: str, max_results: int = 0) -> list[str]:
