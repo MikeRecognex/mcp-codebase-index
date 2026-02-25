@@ -151,6 +151,7 @@ def run_claude_task(
             "--output-format", "json",
             "--model", model,
             "--mcp-config", config_path,
+            "--strict-mcp-config",
             "-p", prompt,
         ]
 
