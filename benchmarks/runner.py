@@ -185,18 +185,25 @@ def run_claude_task(
 
                 if isinstance(cli_output, dict):
                     # Extract token usage from CLI JSON output
+                    # input_tokens is only the non-cached portion;
+                    # real consumption includes cache_read and cache_creation
                     usage = cli_output.get("usage", {})
                     if usage:
-                        output["input_tokens"] = usage.get("input_tokens", 0)
-                        output["output_tokens"] = usage.get("output_tokens", 0)
-                        output["cache_read_input_tokens"] = usage.get(
-                            "cache_read_input_tokens", 0
-                        )
-                        output["cache_creation_input_tokens"] = usage.get(
-                            "cache_creation_input_tokens", 0
-                        )
-                        output["total_cost_usd"] = usage.get("total_cost_usd", 0)
-                    # Also capture session_id for debugging
+                        uncached = usage.get("input_tokens", 0)
+                        cache_read = usage.get("cache_read_input_tokens", 0)
+                        cache_create = usage.get("cache_creation_input_tokens", 0)
+                        output_tok = usage.get("output_tokens", 0)
+
+                        output["input_tokens_uncached"] = uncached
+                        output["cache_read_input_tokens"] = cache_read
+                        output["cache_creation_input_tokens"] = cache_create
+                        output["output_tokens"] = output_tok
+                        # Total input = all input token types
+                        output["input_tokens"] = uncached + cache_read + cache_create
+                        output["total_cost_usd"] = cli_output.get("total_cost_usd", 0)
+
+                    output["num_turns"] = cli_output.get("num_turns", 0)
+                    output["duration_api_ms"] = cli_output.get("duration_api_ms", 0)
                     if cli_output.get("session_id"):
                         output["session_id"] = cli_output["session_id"]
             except json.JSONDecodeError:
@@ -274,11 +281,13 @@ def run_benchmark(
                 inp = result.get("input_tokens", "?")
                 out = result.get("output_tokens", "?")
                 cost = result.get("total_cost_usd")
+                turns = result.get("num_turns", "?")
                 cost_str = f" | ${cost:.4f}" if cost else ""
                 print(
                     f"  Wall time: {result['wall_time_s']}s | "
                     f"Exit: {result['exit_code']} | "
-                    f"Tokens: {inp} in / {out} out{cost_str}"
+                    f"Tokens: {inp} in / {out} out | "
+                    f"Turns: {turns}{cost_str}"
                 )
 
     return all_results
