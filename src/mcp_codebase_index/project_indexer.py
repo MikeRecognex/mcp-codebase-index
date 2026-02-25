@@ -55,8 +55,10 @@ class ProjectIndexer:
             "**/*.jsx",
             "**/*.go",
             "**/*.rs",
+            "**/*.cs",
             "**/*.md",
             "**/*.txt",
+            "**/*.json",
         ]
         self.exclude_patterns = exclude_patterns or [
             "**/__pycache__/**",
@@ -67,6 +69,9 @@ class ProjectIndexer:
             "**/*.egg-info/**",
             "**/target/**",
             "**/vendor/**",
+            "**/package-lock.json",
+            "**/.package-lock.json",
+            "**/composer.lock",
         ]
         self.max_file_size_bytes = max_file_size_bytes
         self._project_index: ProjectIndex | None = None
@@ -476,6 +481,8 @@ class ProjectIndexer:
             return self._resolve_rust_import(importing_file, module_path, all_files)
         elif ext == ".go":
             return self._resolve_go_import(module_path, all_files)
+        elif ext == ".cs":
+            return self._resolve_csharp_import(module_path, all_files)
 
         return None
 
@@ -626,6 +633,41 @@ class ProjectIndexer:
                 normalized = d.replace(os.sep, '/')
                 if normalized == suffix or normalized.endswith('/' + suffix):
                     return f
+
+        return None
+
+    def _resolve_csharp_import(
+        self, module_path: str, all_files: set[str]
+    ) -> str | None:
+        """Resolve a C# using directive to a project file.
+
+        Best-effort: converts namespace segments to path (Ns.Sub -> Ns/Sub.cs).
+        Skips well-known external namespaces (System.*, Microsoft.*).
+        """
+        if not module_path:
+            return None
+
+        # Skip external namespaces
+        if module_path.startswith(('System', 'Microsoft', 'Newtonsoft',
+                                   'NUnit', 'Xunit', 'Moq')):
+            return None
+
+        # Convert Namespace.Sub to path: Namespace/Sub.cs
+        rel_module = module_path.replace('.', '/')
+
+        # Search in common locations
+        search_prefixes = ['', 'src/', 'lib/']
+        for prefix in search_prefixes:
+            candidate = (prefix + rel_module + '.cs').replace(os.sep, '/')
+            if candidate in all_files:
+                return candidate
+            # Try as directory with matching file
+            # e.g., Models/User.cs for Models.User
+            parts = rel_module.rsplit('/', 1)
+            if len(parts) == 2:
+                candidate = (prefix + parts[0] + '/' + parts[1] + '.cs').replace(os.sep, '/')
+                if candidate in all_files:
+                    return candidate
 
         return None
 

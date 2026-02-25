@@ -18,8 +18,10 @@
 
 """Dispatch layer that selects the appropriate annotator by file type."""
 
+from mcp_codebase_index.csharp_annotator import annotate_csharp
 from mcp_codebase_index.generic_annotator import annotate_generic
 from mcp_codebase_index.go_annotator import annotate_go
+from mcp_codebase_index.json_annotator import annotate_json
 from mcp_codebase_index.models import StructuralMetadata
 from mcp_codebase_index.python_annotator import annotate_python
 from mcp_codebase_index.rust_annotator import annotate_rust
@@ -38,6 +40,8 @@ _EXTENSION_MAP: dict[str, str] = {
     ".jsx": "javascript",
     ".go": "go",
     ".rs": "rust",
+    ".cs": "csharp",
+    ".json": "json",
 }
 
 
@@ -75,5 +79,9 @@ def annotate(
         return annotate_go(text, source_name)
     elif file_type == "rust":
         return annotate_rust(text, source_name)
+    elif file_type == "csharp":
+        return annotate_csharp(text, source_name)
+    elif file_type == "json":
+        return annotate_json(text, source_name)
     else:
         return annotate_generic(text, source_name)

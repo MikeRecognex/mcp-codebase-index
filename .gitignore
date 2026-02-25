@@ -55,6 +55,9 @@ htmlcov/
 # ── Codebase index cache ─────────────────────
 .codebase-index-cache.pkl
 
+# ── MCP local config ─────────────────────────
+.mcp.json
+
 # ── Misc ───────────────────────────────────────
 *.log
 *.bak
