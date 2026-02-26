@@ -3,6 +3,7 @@
 
 Usage:
     python benchmarks/runner.py [--repeats N] [--task TASK_ID] [--target-repo PATH]
+                                [--clone-url URL] [--tasks-file PATH]
 
 Runs each task in two modes (with_index, without_index), captures token usage,
 and generates a comparison report.
@@ -34,22 +35,25 @@ RESULTS_DIR = os.path.join(BENCHMARKS_DIR, "results")
 TASKS_FILE = os.path.join(BENCHMARKS_DIR, "tasks.json")
 RUN_ID_FILE = os.path.join(RESULTS_DIR, ".current_run_id")
 
-DJANGO_CLONE_PATH = "/tmp/bench-django"
-DJANGO_CLONE_URL = "https://github.com/django/django.git"
+DEFAULT_TARGET_REPO = "/tmp/bench-django"
 
 DEFAULT_MODEL = "claude-sonnet-4-20250514"
 
 MODES = ["with_index", "without_index"]
 
 
-def ensure_django(target_repo: str):
-    """Clone Django if not already present."""
+def ensure_repo(target_repo: str, clone_url: str | None = None):
+    """Ensure target repo exists, optionally cloning from a URL."""
     if os.path.exists(target_repo):
         print(f"  Target repo exists: {target_repo}")
         return
-    print(f"  Cloning Django to {target_repo} (shallow)...")
+    if not clone_url:
+        print(f"Error: Target repo '{target_repo}' does not exist.")
+        print("  Provide --clone-url to clone it automatically.")
+        sys.exit(1)
+    print(f"  Cloning {clone_url} to {target_repo} (shallow)...")
     subprocess.run(
-        ["git", "clone", "--depth", "1", DJANGO_CLONE_URL, target_repo],
+        ["git", "clone", "--depth", "1", clone_url, target_repo],
         check=True,
     )
 
@@ -340,9 +344,9 @@ Respond with ONLY a JSON object in this exact format, no other text:
     return None
 
 
-def load_tasks(task_filter: str | None = None) -> list[dict]:
+def load_tasks(tasks_file: str, task_filter: str | None = None) -> list[dict]:
     """Load task definitions, optionally filtering to a specific task."""
-    with open(TASKS_FILE) as f:
+    with open(tasks_file) as f:
         tasks = json.load(f)
     if task_filter:
         tasks = [t for t in tasks if t["id"] == task_filter]
@@ -500,8 +504,16 @@ def main():
         help="Run only a specific task ID (e.g., find_symbol)",
     )
     parser.add_argument(
-        "--target-repo", type=str, default=DJANGO_CLONE_PATH,
-        help=f"Target repository to benchmark against (default: {DJANGO_CLONE_PATH})",
+        "--target-repo", type=str, default=DEFAULT_TARGET_REPO,
+        help=f"Target repository to benchmark against (default: {DEFAULT_TARGET_REPO})",
+    )
+    parser.add_argument(
+        "--clone-url", type=str, default=None,
+        help="Git URL to shallow-clone if target-repo doesn't exist",
+    )
+    parser.add_argument(
+        "--tasks-file", type=str, default=TASKS_FILE,
+        help=f"Path to tasks JSON file (default: {TASKS_FILE})",
     )
     parser.add_argument(
         "--model", type=str, default=DEFAULT_MODEL,
@@ -519,7 +531,7 @@ def main():
 
     # Setup
     target_repo = os.path.abspath(args.target_repo)
-    ensure_django(target_repo)
+    ensure_repo(target_repo, clone_url=args.clone_url)
 
     if not args.no_prebuild:
         prebuild_index(target_repo)
@@ -536,7 +548,7 @@ def main():
         sys.exit(1)
 
     # Load tasks
-    tasks = load_tasks(args.task)
+    tasks = load_tasks(args.tasks_file, args.task)
     print(f"  Tasks: {len(tasks)}")
 
     # Timestamp for this run

@@ -1,0 +1,32 @@
+[
+  {
+    "id": "find_symbol",
+    "category": "Navigation",
+    "description": "Find a symbol definition and understand its parameters",
+    "prompt": "Where is the method that streams chat completions from the vLLM backend? Show me the full signature and explain the cancel_event parameter."
+  },
+  {
+    "id": "trace_chain",
+    "category": "Understanding",
+    "description": "Trace an execution path through the codebase",
+    "prompt": "Trace the execution path when a client sends a response.create WebSocket message that triggers a tool call. List every function/method from the WebSocket handler through to the tool result being sent back."
+  },
+  {
+    "id": "impact_analysis",
+    "category": "Impact",
+    "description": "Analyze the impact of changing a core method",
+    "prompt": "If I changed the signature of StateStore.append_message in state_store.py, what other files and functions would be affected? List direct callers and transitive impacts."
+  },
+  {
+    "id": "module_arch",
+    "category": "Architecture",
+    "description": "Understand the architecture of a subsystem",
+    "prompt": "Explain the tool system architecture. How does Sonic distinguish between client-executed and server-executed tools? What security controls exist? List all builtin tools."
+  },
+  {
+    "id": "find_usages",
+    "category": "Search",
+    "description": "Find all usages of a module across the codebase",
+    "prompt": "Find all files that import or reference the Settings class from config.py. For each file, explain which settings fields are used and what they configure."
+  }
+]
