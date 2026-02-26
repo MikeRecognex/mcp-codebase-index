@@ -113,7 +113,7 @@ class ProjectIndexer:
         total_classes = 0
 
         for fpath in file_paths:
-            rel_path = os.path.relpath(fpath, self.root_path)
+            rel_path = os.path.relpath(fpath, self.root_path).replace(os.sep, "/")
             try:
                 source = self._read_file(fpath)
             except (OSError, UnicodeDecodeError) as e:
@@ -188,7 +188,7 @@ class ProjectIndexer:
             if os.path.isabs(file_path)
             else os.path.join(self.root_path, file_path)
         )
-        rel_path = os.path.relpath(abs_path, self.root_path)
+        rel_path = os.path.relpath(abs_path, self.root_path).replace(os.sep, "/")
 
         idx = self._project_index
 
@@ -281,7 +281,7 @@ class ProjectIndexer:
             if os.path.isabs(file_path)
             else os.path.join(self.root_path, file_path)
         )
-        rel_path = os.path.relpath(abs_path, self.root_path)
+        rel_path = os.path.relpath(abs_path, self.root_path).replace(os.sep, "/")
 
         idx = self._project_index
         old_metadata = idx.files.get(rel_path)
@@ -344,7 +344,7 @@ class ProjectIndexer:
             for p in root.glob(pattern):
                 if p.is_file():
                     abs_str = str(p)
-                    rel_str = os.path.relpath(abs_str, self.root_path)
+                    rel_str = os.path.relpath(abs_str, self.root_path).replace(os.sep, "/")
 
                     if self._is_excluded(rel_str):
                         continue
