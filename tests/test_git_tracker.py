@@ -53,7 +53,7 @@ class TestResolveGitDir:
         wt = tmp_path / "worktrees" / "feature"
         wt.mkdir(parents=True)
         (wt / ".git").write_text(
-            f"gitdir: ../../.git/worktrees/feature\n"
+            "gitdir: ../../.git/worktrees/feature\n"
         )
         assert os.path.normpath(
             _resolve_git_dir(str(wt))
