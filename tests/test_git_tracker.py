@@ -13,7 +13,6 @@ from mcp_codebase_index.git_tracker import (
     _find_git,
     _resolve_git_dir,
     _COMMIT_HASH_RE,
-    _GIT_CMD,
 )
 
 
