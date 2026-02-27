@@ -57,6 +57,20 @@ class TestLoadDisabledToolsFromConfig:
         result = srv._load_disabled_tools_from_config(str(tmp_path))
         assert result == set()
 
+    def test_whitespace_in_values_stripped(self, tmp_path):
+        (tmp_path / ".mcp-codebase-index.toml").write_text(
+            'disabled_tools = [" search_codebase ", "get_call_chain "]\n'
+        )
+        result = srv._load_disabled_tools_from_config(str(tmp_path))
+        assert result == {"search_codebase", "get_call_chain"}
+
+    def test_blank_strings_filtered(self, tmp_path):
+        (tmp_path / ".mcp-codebase-index.toml").write_text(
+            'disabled_tools = ["search_codebase", " ", ""]\n'
+        )
+        result = srv._load_disabled_tools_from_config(str(tmp_path))
+        assert result == {"search_codebase"}
+
 
 # ---------------------------------------------------------------------------
 # _init_disabled_tools
@@ -163,3 +177,51 @@ class TestCallToolGuard:
         result = asyncio.run(srv.call_tool("get_project_summary", {}))
         assert result[0].text == "mock summary"
         assert srv._tool_call_counts.get("get_project_summary") == 1
+
+
+# ---------------------------------------------------------------------------
+# CLI argument parsing (main_sync integration)
+# ---------------------------------------------------------------------------
+
+
+class TestCliParsing:
+    def _parse(self, argv: list[str]) -> tuple:
+        """Run the same argparse logic as main_sync with custom argv."""
+        import argparse
+
+        parser = argparse.ArgumentParser(description="MCP codebase index server")
+        parser.add_argument(
+            "--disabled-tools",
+            type=lambda s: [t.strip() for t in s.split(",") if t.strip()],
+            default=None,
+            help="Comma-separated list of tool names to disable",
+        )
+        return parser.parse_known_args(argv)
+
+    def test_disabled_tools_parsed(self):
+        args, unknown = self._parse(["--disabled-tools", "search_codebase,get_call_chain"])
+        assert args.disabled_tools == ["search_codebase", "get_call_chain"]
+        assert unknown == []
+
+    def test_disabled_tools_with_spaces(self):
+        args, _ = self._parse(["--disabled-tools", " search_codebase , get_call_chain "])
+        assert args.disabled_tools == ["search_codebase", "get_call_chain"]
+
+    def test_no_disabled_tools_flag(self):
+        args, unknown = self._parse([])
+        assert args.disabled_tools is None
+        assert unknown == []
+
+    def test_unknown_args_not_fatal(self):
+        """parse_known_args must not raise SystemExit on unknown flags."""
+        args, unknown = self._parse(["--some-future-flag", "value"])
+        assert args.disabled_tools is None
+        assert "--some-future-flag" in unknown
+
+    def test_unknown_args_coexist_with_disabled_tools(self):
+        args, unknown = self._parse([
+            "--disabled-tools", "search_codebase",
+            "--unknown-flag",
+        ])
+        assert args.disabled_tools == ["search_codebase"]
+        assert "--unknown-flag" in unknown

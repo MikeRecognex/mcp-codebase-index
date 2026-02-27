@@ -120,7 +120,7 @@ def _load_disabled_tools_from_config(project_root: str) -> set[str]:
             file=sys.stderr,
         )
         return set()
-    return set(raw)
+    return {s.strip() for s in raw if s.strip()}
 
 
 def _init_disabled_tools(
@@ -750,7 +750,7 @@ async def call_tool(name: str, arguments: dict) -> list[types.TextContent]:
     if name in _disabled_tools:
         return [TextContent(
             type="text",
-            text=f"Error: tool '{name}' is disabled via configuration.",
+            text=f"Error: tool '{name}' is disabled.",
         )]
 
     # Track tool call counts (including reindex/stats themselves)
@@ -898,7 +898,12 @@ def main_sync():
         default=None,
         help="Comma-separated list of tool names to disable (e.g. search_codebase,get_call_chain)",
     )
-    args = parser.parse_args()
+    args, unknown = parser.parse_known_args()
+    if unknown:
+        print(
+            f"[mcp-codebase-index] Ignoring unknown arguments: {' '.join(unknown)}",
+            file=sys.stderr,
+        )
     asyncio.run(main(cli_disabled=args.disabled_tools))
 
 
