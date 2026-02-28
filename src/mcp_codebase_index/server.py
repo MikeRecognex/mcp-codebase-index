@@ -293,12 +293,25 @@ def _matches_include_patterns(rel_path: str, patterns: list[str]) -> bool:
 
 
 def _maybe_incremental_update() -> None:
-    """Check git for changes and incrementally update the index if needed."""
+    """Check git for changes and incrementally update the index if needed.
+
+    Uses a fast filesystem-based HEAD check first to avoid expensive
+    ``git diff`` subprocess calls when the commit hasn't changed.
+    """
     if not _is_git or _indexer is None or _indexer._project_index is None:
         return
 
     idx = _indexer._project_index
-    changeset = get_changed_files(_project_root, idx.last_indexed_git_ref)
+
+    # Optimisation: if HEAD hasn't moved since last index, skip the
+    # expensive committed-changes diff (since_ref..HEAD) but still check
+    # the working tree for unstaged, staged, and untracked changes.
+    current_head = get_head_commit(_project_root)
+    head_unchanged = current_head and current_head == idx.last_indexed_git_ref
+
+    changeset = get_changed_files(
+        _project_root, idx.last_indexed_git_ref, skip_committed=head_unchanged,
+    )
     if changeset.is_empty:
         return
 
