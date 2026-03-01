@@ -28,12 +28,14 @@ Usage:
 
 from __future__ import annotations
 
+import argparse
 import fnmatch
 import json
 import os
 import sys
 import pickle
 import time
+import tomllib
 import traceback
 
 from mcp.server import Server
@@ -66,6 +68,10 @@ _session_start: float = time.time()
 _tool_call_counts: dict[str, int] = {}
 _total_chars_returned: int = 0
 
+# Tool toggling
+PROTECTED_TOOLS: frozenset[str] = frozenset({"reindex", "get_usage_stats"})
+_disabled_tools: set[str] = set()
+
 # Realistic estimate of what % of codebase you'd need to read without the indexer
 _TOOL_COST_MULTIPLIERS: dict[str, float] = {
     "get_project_summary": 0.10,
@@ -86,6 +92,78 @@ _TOOL_COST_MULTIPLIERS: dict[str, float] = {
     "search_codebase": 0.15,
     "reindex": 0.0,
 }
+
+
+_ALL_TOOL_NAMES: frozenset[str] = frozenset()  # set after TOOLS is defined
+
+
+def _load_disabled_tools_from_config(project_root: str) -> set[str]:
+    """Read `.mcp-codebase-index.toml` and return the set of disabled tool names."""
+    config_path = os.path.join(project_root, ".mcp-codebase-index.toml")
+    if not os.path.isfile(config_path):
+        return set()
+    try:
+        with open(config_path, "rb") as f:
+            data = tomllib.load(f)
+    except Exception as exc:
+        print(
+            f"[mcp-codebase-index] Warning: failed to parse {config_path}: {exc}",
+            file=sys.stderr,
+        )
+        return set()
+    raw = data.get("disabled_tools")
+    if raw is None:
+        return set()
+    if not isinstance(raw, list) or not all(isinstance(s, str) for s in raw):
+        print(
+            "[mcp-codebase-index] Warning: disabled_tools must be a list of strings, ignoring",
+            file=sys.stderr,
+        )
+        return set()
+    return {s.strip() for s in raw if s.strip()}
+
+
+def _init_disabled_tools(
+    cli_disabled: list[str] | None = None,
+    *,
+    project_root: str | None = None,
+) -> None:
+    """Union CLI + config disabled tools, strip protected, warn about unknowns."""
+    global _disabled_tools
+    merged: set[str] = set()
+
+    if cli_disabled:
+        merged.update(cli_disabled)
+
+    root = project_root or os.environ.get("PROJECT_ROOT", os.getcwd())
+    merged |= _load_disabled_tools_from_config(root)
+
+    # Warn about protected tools that a user tried to disable
+    protected_requested = merged & PROTECTED_TOOLS
+    if protected_requested:
+        print(
+            f"[mcp-codebase-index] Warning: cannot disable protected tools: "
+            f"{', '.join(sorted(protected_requested))}",
+            file=sys.stderr,
+        )
+    merged -= PROTECTED_TOOLS
+
+    # Warn about unknown tool names
+    unknown = merged - _ALL_TOOL_NAMES
+    if unknown:
+        print(
+            f"[mcp-codebase-index] Warning: unknown tools ignored: "
+            f"{', '.join(sorted(unknown))}",
+            file=sys.stderr,
+        )
+    merged &= _ALL_TOOL_NAMES
+
+    _disabled_tools = merged
+    if _disabled_tools:
+        print(
+            f"[mcp-codebase-index] Disabled tools: {', '.join(sorted(_disabled_tools))}",
+            file=sys.stderr,
+        )
 
 
 def _format_result(value: object) -> str:
@@ -648,6 +726,9 @@ TOOLS = [
     ),
 ]
 
+# Now that TOOLS is defined, set the real _ALL_TOOL_NAMES
+_ALL_TOOL_NAMES = frozenset(t.name for t in TOOLS)
+
 
 # ---------------------------------------------------------------------------
 # MCP handlers
@@ -656,12 +737,21 @@ TOOLS = [
 
 @server.list_tools()
 async def list_tools() -> list[Tool]:
+    if _disabled_tools:
+        return [t for t in TOOLS if t.name not in _disabled_tools]
     return TOOLS
 
 
 @server.call_tool()
 async def call_tool(name: str, arguments: dict) -> list[types.TextContent]:
     global _query_fns, _total_chars_returned
+
+    # Reject disabled tools before doing any work
+    if name in _disabled_tools:
+        return [TextContent(
+            type="text",
+            text=f"Error: tool '{name}' is disabled.",
+        )]
 
     # Track tool call counts (including reindex/stats themselves)
     _tool_call_counts[name] = _tool_call_counts.get(name, 0) + 1
@@ -787,7 +877,8 @@ async def call_tool(name: str, arguments: dict) -> list[types.TextContent]:
 # ---------------------------------------------------------------------------
 
 
-async def main():
+async def main(cli_disabled: list[str] | None = None):
+    _init_disabled_tools(cli_disabled)
     async with stdio_server() as (read_stream, write_stream):
         await server.run(
             read_stream,
@@ -800,7 +891,20 @@ def main_sync():
     """Synchronous entry point for console_scripts."""
     import asyncio
 
-    asyncio.run(main())
+    parser = argparse.ArgumentParser(description="MCP codebase index server")
+    parser.add_argument(
+        "--disabled-tools",
+        type=lambda s: [t.strip() for t in s.split(",") if t.strip()],
+        default=None,
+        help="Comma-separated list of tool names to disable (e.g. search_codebase,get_call_chain)",
+    )
+    args, unknown = parser.parse_known_args()
+    if unknown:
+        print(
+            f"[mcp-codebase-index] Ignoring unknown arguments: {' '.join(unknown)}",
+            file=sys.stderr,
+        )
+    asyncio.run(main(cli_disabled=args.disabled_tools))
 
 
 if __name__ == "__main__":
