@@ -30,6 +30,10 @@ Indexes codebases by parsing source files into structural metadata -- functions,
 | Markdown/Text (`.md`, `.txt`, `.rst`) | Heading detection | Sections (# headings, underlines, numbered, ALL-CAPS) |
 | Other | Generic | Line counts only |
 
+## Hosted deployment
+
+A hosted deployment is available on [Fronteir AI](https://fronteir.ai/mcp/mikerecognex-mcp-codebase-index).
+
 ## Installation
 
 ```bash
