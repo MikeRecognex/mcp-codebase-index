@@ -319,7 +319,9 @@ def _maybe_incremental_update() -> None:
         if path in idx.files:
             _indexer.remove_file(path)
 
-    # Process modifications and additions
+    # Process modifications and additions — collect candidates first,
+    # then filter out git-ignored paths in one batch call.
+    candidates: list[tuple[str, str]] = []  # (rel_path, abs_path)
     for path in changeset.modified + changeset.added:
         if _indexer._is_excluded(path):
             continue
@@ -328,7 +330,15 @@ def _maybe_incremental_update() -> None:
         abs_path = os.path.join(_project_root, path)
         if not os.path.isfile(abs_path):
             continue
-        _indexer.reindex_file(path, skip_graph_rebuild=True)
+        candidates.append((path, abs_path))
+
+    git_ignored = _indexer._get_git_ignored_paths(
+        {abs_path for _, abs_path in candidates},
+    )
+    for rel_path, abs_path in candidates:
+        if abs_path in git_ignored:
+            continue
+        _indexer.reindex_file(rel_path, skip_graph_rebuild=True)
 
     # Rebuild cross-file graphs once
     _indexer.rebuild_graphs()
