@@ -752,6 +752,52 @@ class TestGitIgnore:
         ignored = indexer._get_git_ignored_paths({str(sample_project / "README.md")})
         assert ignored == set()
 
+    def test_multi_repo_parent_directory(self, tmp_path):
+        """PROJECT_ROOT spans multiple git repos, each with its own .gitignore."""
+        import subprocess
+
+        parent = tmp_path / "code"
+        parent.mkdir()
+
+        def _init_repo(name, gitignore, src_file, ignored_dir, ignored_file):
+            repo = parent / name
+            repo.mkdir()
+            subprocess.run(
+                ["git", "init"], cwd=str(repo), capture_output=True, check=True,
+            )
+            subprocess.run(
+                ["git", "config", "user.email", "test@test.com"],
+                cwd=str(repo), capture_output=True, check=True,
+            )
+            subprocess.run(
+                ["git", "config", "user.name", "Test"],
+                cwd=str(repo), capture_output=True, check=True,
+            )
+            (repo / ".gitignore").write_text(gitignore)
+            src = repo / "src"
+            src.mkdir()
+            (src / src_file).write_text("x = 1\n")
+            ign = repo / ignored_dir
+            ign.mkdir()
+            (ign / ignored_file).write_text("x = 1\n")
+
+        _init_repo("alpha", "dist/\n", "main.py", "dist", "bundle.py")
+        _init_repo("beta", "build/\n", "app.py", "build", "output.py")
+        _init_repo("gamma", ".next/\n", "index.py", ".next", "cache.py")
+
+        indexer = ProjectIndexer(str(parent))
+        idx = indexer.index()
+
+        filenames = {os.path.basename(f) for f in idx.files}
+        # Source files should be indexed.
+        assert "main.py" in filenames
+        assert "app.py" in filenames
+        assert "index.py" in filenames
+        # Git-ignored files should be excluded.
+        assert "bundle.py" not in filenames, "alpha/dist/bundle.py should be excluded"
+        assert "output.py" not in filenames, "beta/build/output.py should be excluded"
+        assert "cache.py" not in filenames, "gamma/.next/cache.py should be excluded"
+
     def test_gitignore_with_nested_patterns(self, git_project):
         """Additional patterns added to .gitignore are also respected."""
         import subprocess
