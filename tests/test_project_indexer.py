@@ -658,6 +658,121 @@ class TestRustProject:
             assert models_path in imports or utils_path in imports
 
 
+# ---------------------------------------------------------------------------
+# Test: .gitignore / git-ignore filtering
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def git_project(tmp_path):
+    """Create a project inside a git repo with a .gitignore.
+
+    Structure:
+        repo/
+            .gitignore          (ignores build/ and *.log)
+            src/
+                app.py
+            build/
+                output.py       (should be git-ignored)
+            debug.log           (should be git-ignored)
+            README.md
+    """
+    import subprocess
+
+    root = tmp_path / "repo"
+    root.mkdir()
+
+    # Initialise a git repo so git check-ignore works.
+    subprocess.run(
+        ["git", "init"], cwd=str(root), capture_output=True, check=True,
+    )
+    subprocess.run(
+        ["git", "config", "user.email", "test@test.com"],
+        cwd=str(root), capture_output=True, check=True,
+    )
+    subprocess.run(
+        ["git", "config", "user.name", "Test"],
+        cwd=str(root), capture_output=True, check=True,
+    )
+
+    # .gitignore
+    (root / ".gitignore").write_text("build/\n*.log\n")
+
+    # Source file (not ignored)
+    src = root / "src"
+    src.mkdir()
+    (src / "app.py").write_text("def main():\n    pass\n")
+
+    # Build artefact (git-ignored)
+    build = root / "build"
+    build.mkdir()
+    (build / "output.py").write_text("x = 1\n")
+
+    # Log file (git-ignored)
+    (root / "debug.log").write_text("some log\n")
+
+    # README (not ignored)
+    (root / "README.md").write_text("# Repo\n")
+
+    return root
+
+
+class TestGitIgnore:
+    """Verify that _get_git_ignored_paths and _discover_files honour
+    .gitignore when the project is a git repository."""
+
+    def test_git_ignored_paths_detected(self, git_project):
+        indexer = ProjectIndexer(str(git_project))
+        # Build a set of all candidate paths (before filtering).
+        all_paths: set[str] = set()
+        for pattern in indexer.include_patterns:
+            from pathlib import Path
+
+            for p in Path(str(git_project)).glob(pattern):
+                if p.is_file():
+                    all_paths.add(str(p))
+
+        ignored = indexer._get_git_ignored_paths(all_paths)
+        ignored_names = {os.path.basename(p) for p in ignored}
+
+        assert "output.py" in ignored_names, "build/output.py should be git-ignored"
+
+    def test_discover_files_excludes_git_ignored(self, git_project):
+        indexer = ProjectIndexer(str(git_project))
+        idx = indexer.index()
+
+        filenames = {os.path.basename(f) for f in idx.files}
+        assert "app.py" in filenames, "src/app.py should be indexed"
+        assert "README.md" in filenames, "README.md should be indexed"
+        assert "output.py" not in filenames, "build/output.py should be excluded"
+
+    def test_non_git_project_no_filtering(self, sample_project):
+        """In a non-git directory, _get_git_ignored_paths returns empty."""
+        indexer = ProjectIndexer(str(sample_project))
+        ignored = indexer._get_git_ignored_paths({str(sample_project / "README.md")})
+        assert ignored == set()
+
+    def test_gitignore_with_nested_patterns(self, git_project):
+        """Additional patterns added to .gitignore are also respected."""
+        import subprocess
+
+        # Add a new ignore pattern
+        gitignore = git_project / ".gitignore"
+        gitignore.write_text(gitignore.read_text() + "src/generated/\n")
+
+        # Create the directory with a file
+        gen = git_project / "src" / "generated"
+        gen.mkdir()
+        (gen / "auto.py").write_text("y = 2\n")
+
+        indexer = ProjectIndexer(str(git_project))
+        idx = indexer.index()
+
+        filenames = {os.path.basename(f) for f in idx.files}
+        assert "auto.py" not in filenames, "generated/auto.py should be excluded"
+        assert "app.py" in filenames, "src/app.py should still be indexed"
+
+
 class TestIntegration:
     def test_index_mcp_codebase_index_source(self):
         """Index the actual mcp-codebase-index src directory as an integration test."""

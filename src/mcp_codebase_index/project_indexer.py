@@ -26,6 +26,7 @@ import fnmatch
 import logging
 import os
 import re
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -336,7 +337,11 @@ class ProjectIndexer:
     # ------------------------------------------------------------------
 
     def _discover_files(self) -> list[str]:
-        """Discover files matching include patterns, excluding exclude patterns."""
+        """Discover files matching include patterns, excluding exclude patterns.
+
+        In git repositories, paths ignored by .gitignore (and .git/info/exclude,
+        global gitignore) are also excluded via ``git check-ignore``.
+        """
         root = Path(self.root_path)
         matched: set[str] = set()
 
@@ -360,6 +365,15 @@ class ProjectIndexer:
 
                     matched.add(abs_str)
 
+        # In git repos, also honour .gitignore / .git/info/exclude / global
+        # gitignore by asking git which of the discovered paths it would ignore.
+        git_ignored = self._get_git_ignored_paths(matched)
+        if git_ignored:
+            logger.info(
+                "Excluding %d git-ignored files from index", len(git_ignored),
+            )
+            matched -= git_ignored
+
         return sorted(matched)
 
     def _is_excluded(self, rel_path: str) -> bool:
@@ -377,6 +391,39 @@ class ProjectIndexer:
             if pattern_parts in parts:
                 return True
         return False
+
+    def _get_git_ignored_paths(self, paths: set[str]) -> set[str]:
+        """Return the subset of *paths* that git considers ignored.
+
+        Uses ``git check-ignore --stdin`` which respects ``.gitignore``,
+        ``.git/info/exclude``, and the global gitignore.  Returns an empty
+        set when the project is not a git repository or git is unavailable.
+        """
+        if not paths:
+            return set()
+        try:
+            result = subprocess.run(
+                ["git", "check-ignore", "--stdin"],
+                input="\n".join(paths),
+                cwd=self.root_path,
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            return set()
+
+        # git check-ignore exits 0 when at least one path is ignored,
+        # 1 when none are ignored, and 128 on error.
+        if result.returncode not in (0, 1):
+            return set()
+
+        ignored: set[str] = set()
+        for line in result.stdout.splitlines():
+            line = line.strip()
+            if line:
+                ignored.add(line)
+        return ignored
 
     def _read_file(self, abs_path: str) -> str:
         """Read a file as text, trying UTF-8 first then latin-1 as fallback."""
